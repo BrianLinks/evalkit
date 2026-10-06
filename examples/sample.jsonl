@@ -1,0 +1,8 @@
+{"id":"capital-kenya","prompt":"What is the capital of Kenya?","response":"Nairobi.","humanScores":{"accuracy":5,"clarity":5,"completeness":3}}
+{"id":"mutex","prompt":"Explain what a mutex is.","response":"A mutex is a lock that lets only one thread enter a critical section at a time. A thread acquires it before touching shared data and releases it afterward.","humanScores":{"accuracy":5,"clarity":5,"completeness":4}}
+{"id":"f-to-c","prompt":"Convert 100 Fahrenheit to Celsius.","response":"100 F is about 37.8 C.","humanScores":{"accuracy":5,"clarity":5,"completeness":4}}
+{"id":"achebe","prompt":"Who wrote Things Fall Apart?","response":"It was written by Wole Soyinka.","reference":"Chinua Achebe","humanScores":{"accuracy":1,"clarity":4,"completeness":2}}
+{"id":"redis","prompt":"Give two uses of Redis.","response":"Redis is often used as a cache and as a message broker through its pub/sub feature.","humanScores":{"accuracy":4,"clarity":4,"completeness":3}}
+{"id":"http-404","prompt":"What does HTTP status 404 mean?","response":"It means the server could not find the requested resource.","humanScores":{"accuracy":5,"clarity":5,"completeness":4}}
+{"id":"tcp","prompt":"Summarise TCP in one sentence.","response":"TCP is a connection oriented transport protocol that gives ordered, reliable delivery of a byte stream.","humanScores":{"accuracy":5,"clarity":4,"completeness":4}}
+{"id":"multiply","prompt":"What is 17 * 23?","response":"17 * 23 is 401.","reference":"391","humanScores":{"accuracy":1,"clarity":4,"completeness":2}}

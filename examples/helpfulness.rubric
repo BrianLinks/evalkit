@@ -1,0 +1,20 @@
+# Example rubric used by the README and the CLI tests.
+rubric Helpfulness
+scale 1..5
+
+criterion accuracy weight 2
+  ask: Is every factual claim in the response correct?
+  anchor 1: Contains a clear factual error
+  anchor 3: Mostly correct with a minor slip
+  anchor 5: Fully correct
+
+criterion clarity
+  ask: Is the response easy to read and to the point?
+  anchor 1: Confusing or rambling
+  anchor 5: Clear and concise
+
+criterion completeness
+  ask: Does the response answer everything the prompt asked?
+  anchor 1: Ignores most of the prompt
+  anchor 3: Answers the main point only
+  anchor 5: Covers every part of the prompt
