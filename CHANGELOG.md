@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 - 2026-10-07
+
+- Resumable runs: `evalkit run --resume <run-id>` continues an interrupted run and retries failed calls. Guarded by hashes of the dataset and rubric and a judge-list check.
+- Pairwise comparison: `evalkit compare run|report|list`. Each judge sees both orders; reports win rates with Wilson intervals, order consistency, first-pick rate and judge-versus-human agreement.
+- Every provider now supports both scoring and comparison through one `Completer` interface.
+- The report line "Failed judge calls" is now "Unresolved judge failures" and no longer counts failures that were later retried successfully.
+- Internal: generic `FileStore`, shared `resolveRows` and `pool`.
+
 ## 0.1.0 - 2026-10-06
 
 First release.

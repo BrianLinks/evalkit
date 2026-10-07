@@ -1,8 +1,8 @@
 # EvalKit
 
-Score LLM outputs against a rubric using LLM judges, then measure how much the judges agree with each other and with human scores.
+Score LLM outputs against a rubric using LLM judges, compare two systems head to head, and measure how much the judges agree with each other and with human scores.
 
-You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha).
+You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, and pairwise mode measures judge position bias.
 
 ## Quick start
 
@@ -55,15 +55,48 @@ One JSON object per line:
 
 `humanScores` is optional. When present, those scores join the run as a rater called `human`, so the report shows judge-versus-human agreement.
 
+## Resuming a run
+
+Every judge call is saved the moment it finishes. If a run is interrupted, or some calls failed (rate limits, a bad key, a network drop), continue it with the run id that was printed when it started:
+
+```sh
+node dist/bin.js run --rubric examples/helpfulness.rubric --dataset examples/sample.jsonl \
+  --judge mock:a --resume <run-id>
+```
+
+Only work without a successful result is redone, and earlier failures are retried. The rubric, dataset and judge list must be identical to the original run, otherwise EvalKit stops and tells you to start a new run, because mixing results from different inputs would make the statistics meaningless. See [ADR 0004](docs/adr/0004-append-only-log-resume.md).
+
+## Pairwise comparison
+
+Compare two systems (A and B) on the same prompts. Each judge sees every pair twice, once with A first and once with B first, for every rubric criterion. A verdict only counts when both orders agree; otherwise it is recorded as a tie and counted as a flip. That is how EvalKit measures position bias instead of silently absorbing it. See [ADR 0005](docs/adr/0005-pairwise-both-orders.md).
+
+```sh
+node dist/bin.js compare run \
+  --rubric examples/helpfulness.rubric --pairs examples/pairs.jsonl \
+  --judge mock:a --judge mock:b --label-a baseline --label-b candidate
+node dist/bin.js compare list
+node dist/bin.js compare report <run-id> --json
+```
+
+Pair files are JSON Lines. `human` is optional and gives a human preference per criterion:
+
+```json
+{"id": "mutex", "prompt": "...", "responseA": "...", "responseB": "...", "human": {"accuracy": "A", "clarity": "tie"}}
+```
+
+For each criterion the report shows, per rater, how many pairs A won, B won or tied, the A win rate with a 95% Wilson confidence interval (ties excluded), how consistent the judge was across the two orders, and how often it picked whichever response it saw first. A first-pick rate far from 50% suggests position bias. It also shows agreement and Cohen's kappa between each pair of raters. Pairwise runs are stored separately under `.evalkit/pairwise/` and are resumable the same way.
+
 ## Reading the report
 
-For each criterion you get mean score per rater, Krippendorff's alpha across all raters, and for each pair of raters the number of shared samples, exact agreement, quadratic-weighted kappa and Spearman's rho. A statistic that cannot be computed (for example kappa when both raters always give the same score) is shown as `n/a` rather than as a number.
+For each criterion you get mean score per rater, Krippendorff's alpha across all raters, and for each pair of raters the number of shared samples, exact agreement, quadratic-weighted kappa and Spearman's rho. A statistic that cannot be computed (for example kappa when both raters always give the same score) is shown as `n/a` rather than as a number. A failed judge call is shown under "Unresolved judge failures" only if it was never retried successfully.
 
 ## Limits
 
 - Judge calls do not set a temperature, because some current models reject it. Repeat a run and compare, or use two judges, to see how stable a judge is.
 - The Anthropic and OpenAI judges are covered by tests that use a fake `fetch`. They have not been exercised against the live APIs by the author.
-- Runs cannot be resumed yet. A failed judge call is recorded as an error row and does not stop the run.
+- Pairwise mode compares exactly two systems. Weights in the rubric are ignored there, and there is no overall winner across criteria.
+- A resumed run must use the same judges. Adding a judge to an existing run is not supported.
+- Two processes writing to the same run at once is not supported.
 
 ## Development
 
