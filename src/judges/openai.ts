@@ -1,18 +1,16 @@
 import { z } from "zod";
 import { JudgeParseError } from "../errors.js";
 import { postJson, type HttpOptions } from "./http.js";
-import { buildPrompt, parseVerdict } from "./prompt.js";
-import type { Judge } from "./types.js";
+import type { Completer } from "./types.js";
 
 const ResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1),
 });
 
-export function openaiJudge(model: string, apiKey: string, http: HttpOptions): Judge {
+export function openaiCompleter(model: string, apiKey: string, http: HttpOptions): Completer {
   return {
     id: `openai:${model}`,
-    async judge(request) {
-      const { system, user } = buildPrompt(request);
+    async complete(system, user) {
       const data = await postJson(
         "https://api.openai.com/v1/chat/completions",
         { authorization: `Bearer ${apiKey}` },
@@ -28,7 +26,7 @@ export function openaiJudge(model: string, apiKey: string, http: HttpOptions): J
       );
       const parsed = ResponseSchema.safeParse(data);
       if (!parsed.success) throw new JudgeParseError("unexpected OpenAI response shape");
-      return parseVerdict(parsed.data.choices[0].message.content ?? "", request.rubric);
+      return parsed.data.choices[0].message.content ?? "";
     },
   };
 }

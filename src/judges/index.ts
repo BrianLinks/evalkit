@@ -1,9 +1,10 @@
 import { ConfigError } from "../errors.js";
-import { anthropicJudge } from "./anthropic.js";
+import { anthropicCompleter } from "./anthropic.js";
 import { DEFAULT_HTTP, type HttpOptions } from "./http.js";
 import { mockJudge } from "./mock.js";
-import { openaiJudge } from "./openai.js";
-import type { Judge } from "./types.js";
+import { fromCompleter } from "./llm.js";
+import { openaiCompleter } from "./openai.js";
+import type { ProviderJudge } from "./types.js";
 
 export interface JudgeFactoryOptions {
   env: Record<string, string | undefined>;
@@ -12,7 +13,7 @@ export interface JudgeFactoryOptions {
 }
 
 /** Build a judge from a spec like `anthropic:<model>`, `openai:<model>` or `mock:<name>`. Fails fast on a missing key. */
-export function createJudge(spec: string, options: JudgeFactoryOptions): Judge {
+export function createJudge(spec: string, options: JudgeFactoryOptions): ProviderJudge {
   const colon = spec.indexOf(":");
   if (colon <= 0 || colon === spec.length - 1) {
     throw new ConfigError(`invalid judge "${spec}", expected provider:model (for example mock:a)`);
@@ -31,12 +32,12 @@ export function createJudge(spec: string, options: JudgeFactoryOptions): Judge {
     case "mock":
       return mockJudge(model);
     case "anthropic":
-      return anthropicJudge(model, requireKey("ANTHROPIC_API_KEY"), http);
+      return fromCompleter(anthropicCompleter(model, requireKey("ANTHROPIC_API_KEY"), http));
     case "openai":
-      return openaiJudge(model, requireKey("OPENAI_API_KEY"), http);
+      return fromCompleter(openaiCompleter(model, requireKey("OPENAI_API_KEY"), http));
     default:
       throw new ConfigError(`unknown judge provider "${provider}" (use anthropic, openai or mock)`);
   }
 }
 
-export type { Judge, JudgeRequest, Verdict } from "./types.js";
+export type { Judge, JudgeRequest, PairJudge, PairRequest, PairVerdict, ProviderJudge, Verdict } from "./types.js";
