@@ -1,8 +1,13 @@
 export { parseRubric } from "./rubric/parser.js";
 export { RubricSchema, type Criterion, type Rubric } from "./rubric/schema.js";
 export { parseDataset, loadDataset, type Sample } from "./dataset.js";
-export { createJudge, type Judge, type JudgeRequest, type Verdict } from "./judges/index.js";
+export { createJudge, type Judge, type JudgeRequest, type PairJudge, type PairRequest, type PairVerdict, type ProviderJudge, type Verdict } from "./judges/index.js";
 export { executeRun, type ExecuteOptions } from "./runner.js";
 export { RunStore, type RunMeta, type ResultRecord } from "./store.js";
 export { buildReport, formatReport, type RunReport } from "./report.js";
 export { krippendorffAlphaInterval, percentAgreement, spearman, weightedKappa } from "./stats/agreement.js";
+export { executePairwiseRun, type PairExecuteOptions } from "./pairwise/runner.js";
+export { parsePairDataset, type PairSample } from "./pairwise/dataset.js";
+export { PairStore, type PairMeta, type PairRow } from "./pairwise/store.js";
+export { buildPairReport, formatPairReport, type PairReport } from "./pairwise/report.js";
+export { wilsonInterval } from "./stats/proportion.js";

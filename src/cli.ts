@@ -1,7 +1,12 @@
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { parseDataset, readTextFile } from "./dataset.js";
 import { EvalKitError, UsageError } from "./errors.js";
 import { createJudge } from "./judges/index.js";
+import { parsePairDataset } from "./pairwise/dataset.js";
+import { buildPairReport, formatPairReport } from "./pairwise/report.js";
+import { executePairwiseRun } from "./pairwise/runner.js";
+import { PairStore } from "./pairwise/store.js";
 import { buildReport, formatReport } from "./report.js";
 import { parseRubric } from "./rubric/parser.js";
 import { executeRun } from "./runner.js";
@@ -19,9 +24,18 @@ const USAGE = `evalkit - score LLM outputs with judges and measure agreement
 Usage:
   evalkit rubric check <file>
   evalkit run --rubric <file> --dataset <file.jsonl> --judge <spec> [--judge <spec> ...]
-              [--concurrency <n>] [--store <dir>]
+              [--concurrency <n>] [--store <dir>] [--resume <run-id>]
   evalkit report <run-id> [--json] [--store <dir>]
   evalkit runs [--store <dir>]
+
+  evalkit compare run --rubric <file> --pairs <file.jsonl> --judge <spec> [--judge <spec> ...]
+                      [--label-a <name>] [--label-b <name>] [--concurrency <n>]
+                      [--store <dir>] [--resume <run-id>]
+  evalkit compare report <run-id> [--json] [--store <dir>]
+  evalkit compare list [--store <dir>]
+
+An interrupted or partly failed run can be continued with --resume <run-id> and the same
+rubric, dataset and judges. Only work without a result yet is redone.
 
 Judge specs: mock:<name> | anthropic:<model> | openai:<model>
 Keys come from ANTHROPIC_API_KEY and OPENAI_API_KEY in the environment.
@@ -56,6 +70,7 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
       judge: { type: "string", multiple: true },
       concurrency: { type: "string", default: "4" },
       store: { type: "string", default: DEFAULT_STORE },
+      resume: { type: "string" },
     },
   });
   if (!values.rubric || !values.dataset) throw new UsageError("run needs --rubric and --dataset");
@@ -69,7 +84,17 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
   const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch }));
 
   const store = new RunStore(values.store ?? DEFAULT_STORE);
-  const meta = await executeRun({ rubric, samples, judges, concurrency, store, datasetPath: values.dataset, datasetText });
+  const meta = await executeRun({
+    rubric,
+    samples,
+    judges,
+    concurrency,
+    store,
+    datasetPath: values.dataset,
+    datasetText,
+    resume: values.resume,
+    onStart: (m) => io.err(`run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
+  });
   const { results } = await store.load(meta.id);
   io.out(formatReport(buildReport(meta, results)));
   return meta.status === "failed" ? 1 : 0;
@@ -102,6 +127,92 @@ async function runsCommand(args: string[], io: CliIo): Promise<number> {
   return 0;
 }
 
+const pairStore = (dir: string | undefined): PairStore => new PairStore(join(dir ?? DEFAULT_STORE, "pairwise"));
+
+async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
+  const { values } = parseArgs({
+    args,
+    allowPositionals: false,
+    options: {
+      rubric: { type: "string" },
+      pairs: { type: "string" },
+      judge: { type: "string", multiple: true },
+      "label-a": { type: "string", default: "A" },
+      "label-b": { type: "string", default: "B" },
+      concurrency: { type: "string", default: "4" },
+      store: { type: "string", default: DEFAULT_STORE },
+      resume: { type: "string" },
+    },
+  });
+  if (!values.rubric || !values.pairs) throw new UsageError("compare run needs --rubric and --pairs");
+  const specs = values.judge ?? [];
+  if (specs.length === 0) throw new UsageError("compare run needs at least one --judge (for example mock:a)");
+  const concurrency = parseConcurrency(values.concurrency ?? "4");
+
+  const rubric = parseRubric(await readTextFile(values.rubric));
+  const datasetText = await readTextFile(values.pairs);
+  const pairs = parsePairDataset(datasetText);
+  const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch }));
+
+  const store = pairStore(values.store);
+  const meta = await executePairwiseRun({
+    rubric,
+    pairs,
+    judges,
+    concurrency,
+    store,
+    datasetPath: values.pairs,
+    datasetText,
+    labels: { a: values["label-a"] ?? "A", b: values["label-b"] ?? "B" },
+    resume: values.resume,
+    onStart: (m) => io.err(`compare run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
+  });
+  const { rows } = await store.load(meta.id);
+  io.out(formatPairReport(buildPairReport(meta, rows)));
+  return meta.status === "failed" ? 1 : 0;
+}
+
+async function compareReportCommand(args: string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { json: { type: "boolean", default: false }, store: { type: "string", default: DEFAULT_STORE } },
+  });
+  if (positionals.length !== 1) throw new UsageError("usage: evalkit compare report <run-id> [--json] [--store <dir>]");
+  const { meta, rows } = await pairStore(values.store).load(positionals[0]);
+  const report = buildPairReport(meta, rows);
+  io.out(values.json ? `${JSON.stringify(report, null, 2)}\n` : formatPairReport(report));
+  return 0;
+}
+
+async function compareListCommand(args: string[], io: CliIo): Promise<number> {
+  const { values } = parseArgs({ args, allowPositionals: false, options: { store: { type: "string", default: DEFAULT_STORE } } });
+  const metas = await pairStore(values.store).list();
+  if (metas.length === 0) {
+    io.out("no pairwise runs yet\n");
+    return 0;
+  }
+  for (const m of metas) {
+    const failed = m.counts ? `${m.counts.failed}/${m.counts.tasks} failed` : "unfinished";
+    io.out(`${m.id}  ${m.status.padEnd(9)}  ${m.rubric.name}  ${m.labels.a} vs ${m.labels.b}  ${m.raters.join(",")}  ${failed}\n`);
+  }
+  return 0;
+}
+
+async function compareCommand(args: string[], io: CliIo): Promise<number> {
+  const [sub, ...rest] = args;
+  switch (sub) {
+    case "run":
+      return compareRunCommand(rest, io);
+    case "report":
+      return compareReportCommand(rest, io);
+    case "list":
+      return compareListCommand(rest, io);
+    default:
+      throw new UsageError("usage: evalkit compare run|report|list ...");
+  }
+}
+
 /** Run the CLI. Returns the process exit code: 0 ok, 1 runtime error, 2 usage error. */
 export async function main(argv: string[], io: CliIo): Promise<number> {
   const [command, ...rest] = argv;
@@ -115,6 +226,8 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
         return await reportCommand(rest, io);
       case "runs":
         return await runsCommand(rest, io);
+      case "compare":
+        return await compareCommand(rest, io);
       case undefined:
         io.err(USAGE);
         return 2;
