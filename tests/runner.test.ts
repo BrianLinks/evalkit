@@ -7,7 +7,7 @@ import { mockJudge } from "../src/judges/mock.js";
 import type { Judge } from "../src/judges/types.js";
 import { executeRun } from "../src/runner.js";
 import { parseRubric } from "../src/rubric/parser.js";
-import { RunStore } from "../src/store.js";
+import { RunStore, sha256 } from "../src/store.js";
 
 let dir: string;
 let store: RunStore;
@@ -103,5 +103,86 @@ describe("executeRun", () => {
     const meta = await executeRun({ ...makeBase(), judges: [mockJudge("a")] });
     expect(meta.datasetSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(meta.rubricSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  describe("resume", () => {
+    const counting = (id: string, calls: string[]): Judge => ({
+      id,
+      async judge({ sample, criterion }) {
+        calls.push(`${sample.id}/${criterion.id}`);
+        return { score: 3, rationale: "" };
+      },
+    });
+
+    it("continues an interrupted run without redoing finished work or duplicating human rows", async () => {
+      // Simulate a crash: the run exists, three human rows are partly written, two judge results are saved.
+      const crashed = await store.create({
+        datasetPath: "d.jsonl",
+        datasetSha256: sha256(datasetText),
+        rubricSha256: sha256(JSON.stringify(rubric)),
+        rubric,
+        raters: ["counting"],
+        concurrency: 2,
+      });
+      await store.append(crashed.id, { sampleId: "s1", criterionId: "a", rater: "human", kind: "human", score: 4 });
+      await store.append(crashed.id, { sampleId: "s1", criterionId: "a", rater: "counting", kind: "judge", score: 3 });
+      await store.append(crashed.id, { sampleId: "s1", criterionId: "b", rater: "counting", kind: "judge", score: 3 });
+
+      const calls: string[] = [];
+      const meta = await executeRun({ ...makeBase(), judges: [counting("counting", calls)], resume: crashed.id });
+      expect(meta.id).toBe(crashed.id);
+      expect(meta.status).toBe("completed");
+      expect(meta.resumes).toBe(1);
+      expect(meta.counts).toEqual({ tasks: 6, failed: 0 });
+      expect(calls).toHaveLength(4);
+      expect(calls).not.toContain("s1/a");
+      expect(calls).not.toContain("s1/b");
+
+      const rows = await store.loadResults(crashed.id);
+      expect(rows.filter((r) => r.kind === "human")).toHaveLength(3);
+      expect(await store.list()).toHaveLength(1);
+    });
+
+    it("retries earlier failures and clears them once they succeed", async () => {
+      let healthy = false;
+      const calls: string[] = [];
+      const recovering: Judge = {
+        id: "recovering",
+        async judge({ sample, criterion }) {
+          calls.push(`${sample.id}/${criterion.id}`);
+          if (!healthy && sample.id === "s2") throw new Error("rate limited");
+          return { score: 4, rationale: "" };
+        },
+      };
+      const first = await executeRun({ ...makeBase(), judges: [recovering] });
+      expect(first.counts).toEqual({ tasks: 6, failed: 2 });
+
+      healthy = true;
+      calls.length = 0;
+      const second = await executeRun({ ...makeBase(), judges: [recovering], resume: first.id });
+      expect(calls.sort()).toEqual(["s2/a", "s2/b"]);
+      expect(second.counts).toEqual({ tasks: 6, failed: 0 });
+      expect(second.status).toBe("completed");
+    });
+
+    it("does nothing when everything already succeeded", async () => {
+      const calls: string[] = [];
+      const judge = counting("counting", calls);
+      const first = await executeRun({ ...makeBase(), judges: [judge] });
+      calls.length = 0;
+      await executeRun({ ...makeBase(), judges: [judge], resume: first.id });
+      expect(calls).toEqual([]);
+    });
+
+    it("refuses to resume when the dataset, rubric or judges changed, or the run is unknown", async () => {
+      const first = await executeRun({ ...makeBase(), judges: [mockJudge("a")] });
+      await expect(
+        executeRun({ ...makeBase(), datasetText: `${datasetText}\n`, judges: [mockJudge("a")], resume: first.id }),
+      ).rejects.toThrow(/dataset changed/);
+      const otherRubric = parseRubric("rubric R\nscale 1..5\ncriterion a\n  ask: different\ncriterion b weight 2\n  ask: q2\n");
+      await expect(executeRun({ ...makeBase(), rubric: otherRubric, judges: [mockJudge("a")], resume: first.id })).rejects.toThrow(/rubric changed/);
+      await expect(executeRun({ ...makeBase(), judges: [mockJudge("b")], resume: first.id })).rejects.toThrow(/judges must match/);
+      await expect(executeRun({ ...makeBase(), judges: [mockJudge("a")], resume: "nope" })).rejects.toThrow(/not found/);
+    });
   });
 });

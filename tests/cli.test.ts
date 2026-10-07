@@ -37,7 +37,7 @@ describe("cli", () => {
     expect(code).toBe(0);
     expect(run.out()).toContain("Raters: human, mock:a, mock:b");
     expect(run.out()).toContain("Krippendorff alpha");
-    expect(run.out()).toContain("Failed judge calls: 0");
+    expect(run.out()).toContain("Unresolved judge failures: 0");
 
     const list = harness();
     expect(await main(["runs", "--store", store], list.io)).toBe(0);
@@ -57,7 +57,7 @@ describe("cli", () => {
     const h = harness({ ANTHROPIC_API_KEY: "k" }, failing);
     const code = await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "anthropic:m", "--store", store], h.io);
     expect(code).toBe(1); // every call failed, so the run is marked failed
-    expect(h.out()).toContain("Failed judge calls: 24");
+    expect(h.out()).toContain("Unresolved judge failures: 24");
   });
 
   it("exits 2 on usage errors", async () => {

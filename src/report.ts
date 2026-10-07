@@ -1,5 +1,5 @@
 import { krippendorffAlphaInterval, mean, percentAgreement, spearman, weightedKappa } from "./stats/agreement.js";
-import type { ResultRecord, RunMeta } from "./store.js";
+import { resolveResults, type ResultRecord, type RunMeta } from "./store.js";
 
 export interface PairStats {
   a: string;
@@ -39,14 +39,11 @@ export function buildReport(meta: RunMeta, results: readonly ResultRecord[]): Ru
   const { min, max } = meta.rubric.scale;
   const index: ScoreIndex = new Map();
   const raterSet = new Set<string>();
-  let failures = 0;
+  const resolved = resolveResults(results);
+  const failures = resolved.failures.length;
 
-  for (const r of results) {
-    raterSet.add(r.rater);
-    if (r.error !== undefined || r.score === undefined) {
-      failures++;
-      continue;
-    }
+  for (const r of results) raterSet.add(r.rater);
+  for (const r of resolved.ok) {
     const byRater = index.get(r.criterionId) ?? new Map();
     const bySample = byRater.get(r.rater) ?? new Map();
     bySample.set(r.sampleId, r.score);
@@ -130,7 +127,7 @@ export function formatReport(report: RunReport): string {
   lines.push(`Run ${report.runId} (${report.status})`);
   lines.push(`Rubric: ${report.rubric} (scale ${report.scale.min}..${report.scale.max})`);
   lines.push(`Raters: ${report.raters.join(", ") || "none"}`);
-  lines.push(`Failed judge calls: ${report.failures}`);
+  lines.push(`Unresolved judge failures: ${report.failures}`);
 
   for (const c of report.criteria) {
     lines.push("", `Criterion: ${c.id} (weight ${c.weight})`);

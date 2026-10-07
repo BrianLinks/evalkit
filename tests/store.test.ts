@@ -62,6 +62,17 @@ describe("RunStore", () => {
     await expect(store.loadMeta(meta.id)).rejects.toThrow(/invalid/);
   });
 
+  it("reopens a finished run and counts the resume", async () => {
+    const store = new RunStore(dir);
+    const meta = await store.create(input);
+    await store.finish(meta.id, "completed", { tasks: 1, failed: 1 });
+    const reopened = await store.reopen(meta.id);
+    expect(reopened.status).toBe("running");
+    expect(reopened.finishedAt).toBeUndefined();
+    expect(reopened.resumes).toBe(1);
+    expect((await store.reopen(meta.id)).resumes).toBe(2);
+  });
+
   it("writes meta.json with a trailing newline", async () => {
     const store = new RunStore(dir);
     const meta = await store.create(input);
