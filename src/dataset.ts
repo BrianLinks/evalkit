@@ -14,9 +14,9 @@ export const SampleSchema = z.object({
 
 export type Sample = z.infer<typeof SampleSchema>;
 
-/** Parse JSON Lines: one sample object per line. Blank lines are skipped. */
-export function parseDataset(text: string): Sample[] {
-  const samples: Sample[] = [];
+/** Parse JSON Lines where every object has a unique string `id`. Blank lines are skipped. */
+export function parseJsonLines<T extends { id: string }>(text: string, schema: z.ZodType<T>, noun: string): T[] {
+  const items: T[] = [];
   const seen = new Set<string>();
   text.split(/\r?\n/).forEach((line, index) => {
     if (line.trim() === "") return;
@@ -27,14 +27,19 @@ export function parseDataset(text: string): Sample[] {
     } catch {
       throw new DatasetError(`${where}: invalid JSON`);
     }
-    const parsed = SampleSchema.safeParse(raw);
+    const parsed = schema.safeParse(raw);
     if (!parsed.success) throw new DatasetError(`${where}: ${formatZodIssues(parsed.error)}`);
-    if (seen.has(parsed.data.id)) throw new DatasetError(`${where}: duplicate sample id "${parsed.data.id}"`);
+    if (seen.has(parsed.data.id)) throw new DatasetError(`${where}: duplicate ${noun} id "${parsed.data.id}"`);
     seen.add(parsed.data.id);
-    samples.push(parsed.data);
+    items.push(parsed.data);
   });
-  if (samples.length === 0) throw new DatasetError("dataset has no samples");
-  return samples;
+  if (items.length === 0) throw new DatasetError(`dataset has no ${noun}s`);
+  return items;
+}
+
+/** Parse JSON Lines: one sample object per line. */
+export function parseDataset(text: string): Sample[] {
+  return parseJsonLines(text, SampleSchema, "sample");
 }
 
 /** Check that human scores only name real criteria and stay inside the rubric scale. */
