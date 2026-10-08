@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 - 2026-10-08
+
+- Bootstrap confidence intervals: `--bootstrap <n>` and `--seed <n>` on `run`, `report`, `compare run` and `compare report`. Intervals for kappa, Spearman rho and Krippendorff alpha (kappa in pairwise mode). Shown as `[n/a]` when not trustworthy.
+- JSON reports gain `kappaCI`, `spearmanCI`, `alphaCI` and a `bootstrap` block when intervals are requested.
+- Spearman ranks small-integer ratings by counting, about 7 times faster on rating-scale data.
+- Fix: `report --bootstrap` with a bad value now exits with a usage error before touching the run store.
+
 ## 0.2.0 - 2026-10-07
 
 - Resumable runs: `evalkit run --resume <run-id>` continues an interrupted run and retries failed calls. Guarded by hashes of the dataset and rubric and a judge-list check.

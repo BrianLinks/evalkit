@@ -2,7 +2,7 @@
 
 Score LLM outputs against a rubric using LLM judges, compare two systems head to head, and measure how much the judges agree with each other and with human scores.
 
-You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, and pairwise mode measures judge position bias.
+You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, and agreement statistics can come with bootstrap confidence intervals.
 
 ## Quick start
 
@@ -85,6 +85,28 @@ Pair files are JSON Lines. `human` is optional and gives a human preference per 
 ```
 
 For each criterion the report shows, per rater, how many pairs A won, B won or tied, the A win rate with a 95% Wilson confidence interval (ties excluded), how consistent the judge was across the two orders, and how often it picked whichever response it saw first. A first-pick rate far from 50% suggests position bias. It also shows agreement and Cohen's kappa between each pair of raters. Pairwise runs are stored separately under `.evalkit/pairwise/` and are resumable the same way.
+
+## Confidence intervals
+
+Agreement numbers from a small dataset are noisy. Add `--bootstrap <n>` to `run`, `report`, `compare run` or `compare report` to get a 95% interval next to kappa, Spearman's rho and Krippendorff's alpha (kappa only in pairwise mode):
+
+```sh
+node dist/bin.js report <run-id> --bootstrap 1000 --seed 1
+```
+
+```
+  pair              n  agree                kappa                  rho
+  human vs mock:a   8    13%    0.41 [0.05, 0.60]    0.72 [0.43, 1.00]
+  human vs mock:b   8    13%   0.07 [-0.33, 0.54]   0.02 [-0.74, 0.70]
+```
+
+How it works: EvalKit draws `n` resamples (100 to 20000) of your samples with replacement, recomputes the statistic on each, and reports the 2.5th and 97.5th percentiles. A sample is resampled with all of its raters' scores together, so the structure of the data is kept. `--seed` (default 1) makes the result reproducible. See [ADR 0006](docs/adr/0006-percentile-bootstrap.md).
+
+Things to know:
+- An interval shows `[n/a]` when it cannot be trusted: fewer than 2 samples, the statistic is undefined on your data, or it is undefined in more than half of the resamples (for example kappa when a rater uses one score almost everywhere).
+- These are plain percentile intervals with no bias correction. With fewer than about 20 samples they can be too narrow, so treat them as rough. A wide interval is the honest answer on a small dataset.
+- Cost grows with resamples and samples. In one test, 1000 resamples over 3,000 samples, 3 criteria and 3 raters took about 4 seconds.
+- Win rates in pairwise mode already use Wilson intervals and are unaffected by this flag.
 
 ## Reading the report
 
