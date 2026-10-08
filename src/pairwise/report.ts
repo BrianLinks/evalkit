@@ -2,9 +2,15 @@ import { percentAgreement, weightedKappa } from "../stats/agreement.js";
 import { bootstrapInterval, type BootstrapOptions, type Interval } from "../stats/bootstrap.js";
 import { wilsonInterval } from "../stats/proportion.js";
 import { bootstrapNote, formatInterval } from "../report.js";
-import { resolvePairRows, type PairMeta, type PairRow } from "./store.js";
+import { resolvePairRows, type DecidedPairRow, type PairMeta, type PairRow } from "./store.js";
 
-type Winner = "A" | "B" | "tie";
+export type Winner = "A" | "B" | "tie";
+
+export interface FinalDecision {
+  winner: Winner;
+  /** False when the judge disagreed with itself across the two presentation orders. */
+  consistent: boolean;
+}
 
 export interface PairRaterStats {
   rater: string;
@@ -59,6 +65,53 @@ export interface PairReportOptions {
 
 const LABEL_INDEX: Record<Winner, number> = { A: 0, B: 1, tie: 2 };
 
+/**
+ * The final verdict per rater and pair for one criterion. A judge needs a verdict in both orders;
+ * if the two disagree the final verdict is a tie and `consistent` is false. A human has one verdict.
+ */
+export function finalDecisions(
+  ok: readonly DecidedPairRow[],
+  criterionId: string,
+  raters: readonly string[],
+): Map<string, Map<string, FinalDecision>> {
+  const seen = new Map<string, Map<string, Partial<Record<"AB" | "BA", Winner>>>>();
+  for (const row of ok) {
+    if (row.criterionId !== criterionId) continue;
+    const byPair = seen.get(row.rater) ?? new Map();
+    const slot = byPair.get(row.pairId) ?? {};
+    slot[row.order ?? "AB"] = row.winner;
+    byPair.set(row.pairId, slot);
+    seen.set(row.rater, byPair);
+  }
+
+  const finals = new Map<string, Map<string, FinalDecision>>();
+  for (const rater of raters) {
+    const out = new Map<string, FinalDecision>();
+    for (const [pairId, slot] of seen.get(rater) ?? []) {
+      if (rater === "human") {
+        if (slot.AB !== undefined) out.set(pairId, { winner: slot.AB, consistent: true });
+      } else if (slot.AB !== undefined && slot.BA !== undefined) {
+        out.set(pairId, slot.AB === slot.BA ? { winner: slot.AB, consistent: true } : { winner: "tie", consistent: false });
+      }
+    }
+    finals.set(rater, out);
+  }
+  return finals;
+}
+
+/** Per judge: how many non-tie calls there were and how many picked the response shown first. */
+function firstPickCounts(ok: readonly DecidedPairRow[], criterionId: string): Map<string, { first: number; nonTie: number }> {
+  const calls = new Map<string, { first: number; nonTie: number }>();
+  for (const row of ok) {
+    if (row.criterionId !== criterionId || row.kind !== "judge" || row.order === undefined || row.winner === "tie") continue;
+    const c = calls.get(row.rater) ?? { first: 0, nonTie: 0 };
+    c.nonTie++;
+    if ((row.order === "AB" && row.winner === "A") || (row.order === "BA" && row.winner === "B")) c.first++;
+    calls.set(row.rater, c);
+  }
+  return calls;
+}
+
 export function buildPairReport(meta: PairMeta, rows: readonly PairRow[], options: PairReportOptions = {}): PairReport {
   const boot = options.bootstrap;
   const resolved = resolvePairRows(rows);
@@ -67,38 +120,8 @@ export function buildPairReport(meta: PairMeta, rows: readonly PairRow[], option
   const raters = [...raterSet].sort((x, y) => rank(x) - rank(y));
 
   const criteria = meta.rubric.criteria.map((criterion): PairCriterionReport => {
-    // rater -> pair -> order -> winner
-    const seen = new Map<string, Map<string, Partial<Record<"AB" | "BA", Winner>>>>();
-    const calls = new Map<string, { first: number; nonTie: number }>();
-
-    for (const row of resolved.ok) {
-      if (row.criterionId !== criterion.id) continue;
-      const byPair = seen.get(row.rater) ?? new Map();
-      const slot = byPair.get(row.pairId) ?? {};
-      slot[row.order ?? "AB"] = row.winner;
-      byPair.set(row.pairId, slot);
-      seen.set(row.rater, byPair);
-
-      if (row.kind === "judge" && row.order !== undefined && row.winner !== "tie") {
-        const c = calls.get(row.rater) ?? { first: 0, nonTie: 0 };
-        c.nonTie++;
-        if ((row.order === "AB" && row.winner === "A") || (row.order === "BA" && row.winner === "B")) c.first++;
-        calls.set(row.rater, c);
-      }
-    }
-
-    const finals = new Map<string, Map<string, { winner: Winner; consistent: boolean }>>();
-    for (const rater of raters) {
-      const out = new Map<string, { winner: Winner; consistent: boolean }>();
-      for (const [pairId, slot] of seen.get(rater) ?? []) {
-        if (rater === "human") {
-          if (slot.AB !== undefined) out.set(pairId, { winner: slot.AB, consistent: true });
-        } else if (slot.AB !== undefined && slot.BA !== undefined) {
-          out.set(pairId, slot.AB === slot.BA ? { winner: slot.AB, consistent: true } : { winner: "tie", consistent: false });
-        }
-      }
-      finals.set(rater, out);
-    }
+    const finals = finalDecisions(resolved.ok, criterion.id, raters);
+    const calls = firstPickCounts(resolved.ok, criterion.id);
 
     const stats = raters.map((rater): PairRaterStats => {
       const decisions = [...(finals.get(rater)?.values() ?? [])];

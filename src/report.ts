@@ -1,5 +1,5 @@
 import { krippendorffAlphaInterval, mean, percentAgreement, spearman, weightedKappa } from "./stats/agreement.js";
-import { bootstrapInterval, type BootstrapOptions, type Interval } from "./stats/bootstrap.js";
+import { bootstrapInterval, pick, type BootstrapOptions, type Interval } from "./stats/bootstrap.js";
 import { resolveResults, type ResultRecord, type RunMeta } from "./store.js";
 
 export interface PairStats {
@@ -45,8 +45,6 @@ export interface ReportOptions {
 }
 
 type ScoreIndex = Map<string, Map<string, Map<string, number>>>; // criterion -> rater -> sample -> score
-
-const pick = (xs: readonly number[], indices: readonly number[]): number[] => indices.map((i) => xs[i]);
 
 export function buildReport(meta: RunMeta, results: readonly ResultRecord[], options: ReportOptions = {}): RunReport {
   const { min, max } = meta.rubric.scale;
@@ -156,8 +154,8 @@ export function buildReport(meta: RunMeta, results: readonly ResultRecord[], opt
   };
 }
 
-const num = (x: number | null): string => (x === null ? "n/a" : x.toFixed(2));
-const pct = (x: number | null): string => (x === null ? "n/a" : `${Math.round(x * 100)}%`);
+export const num = (x: number | null): string => (x === null ? "n/a" : x.toFixed(2));
+export const pct = (x: number | null): string => (x === null ? "n/a" : `${Math.round(x * 100)}%`);
 
 /** " [low, high]" for an interval, " [n/a]" when it was requested but not trustworthy, "" when not requested. */
 export function formatInterval(ci: Interval | null | undefined): string {

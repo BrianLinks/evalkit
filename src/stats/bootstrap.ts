@@ -27,6 +27,11 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
+/** Select `xs[i]` for each index, used to build a resample. */
+export function pick<T>(xs: readonly T[], indices: readonly number[]): T[] {
+  return indices.map((i) => xs[i]);
+}
+
 /** Quantile of an ascending-sorted array with linear interpolation. */
 export function quantile(sorted: readonly number[], q: number): number {
   const position = q * (sorted.length - 1);
