@@ -1,5 +1,7 @@
 import { percentAgreement, weightedKappa } from "../stats/agreement.js";
+import { bootstrapInterval, type BootstrapOptions, type Interval } from "../stats/bootstrap.js";
 import { wilsonInterval } from "../stats/proportion.js";
+import { bootstrapNote, formatInterval } from "../report.js";
 import { resolvePairRows, type PairMeta, type PairRow } from "./store.js";
 
 type Winner = "A" | "B" | "tie";
@@ -29,6 +31,8 @@ export interface PairAgreement {
   agreement: number | null;
   /** Unweighted Cohen's kappa over the labels A, B, tie. */
   kappa: number | null;
+  /** Bootstrap interval over pairs. Present only when requested; null when not trustworthy. */
+  kappaCI?: Interval | null;
 }
 
 export interface PairCriterionReport {
@@ -45,11 +49,18 @@ export interface PairReport {
   raters: string[];
   failures: number;
   criteria: PairCriterionReport[];
+  /** Settings used for the intervals, when requested. */
+  bootstrap?: BootstrapOptions;
+}
+
+export interface PairReportOptions {
+  bootstrap?: BootstrapOptions;
 }
 
 const LABEL_INDEX: Record<Winner, number> = { A: 0, B: 1, tie: 2 };
 
-export function buildPairReport(meta: PairMeta, rows: readonly PairRow[]): PairReport {
+export function buildPairReport(meta: PairMeta, rows: readonly PairRow[], options: PairReportOptions = {}): PairReport {
+  const boot = options.bootstrap;
   const resolved = resolvePairRows(rows);
   const raterSet = new Set(rows.map((r) => r.rater));
   const rank = (rater: string): number => (rater === "human" ? -1 : meta.raters.indexOf(rater));
@@ -119,13 +130,31 @@ export function buildPairReport(meta: PairMeta, rows: readonly PairRow[]): PairR
         const shared = [...left.keys()].filter((id) => right.has(id)).sort();
         const a = shared.map((id) => LABEL_INDEX[left.get(id).winner as Winner]);
         const b = shared.map((id) => LABEL_INDEX[right.get(id).winner as Winner]);
-        agreements.push({ a: raters[i], b: raters[j], n: shared.length, agreement: percentAgreement(a, b), kappa: weightedKappa(a, b, 0, 2, "none") });
+        agreements.push({
+          a: raters[i],
+          b: raters[j],
+          n: shared.length,
+          agreement: percentAgreement(a, b),
+          kappa: weightedKappa(a, b, 0, 2, "none"),
+          ...(boot
+            ? { kappaCI: bootstrapInterval(a.length, (idx) => weightedKappa(idx.map((k) => a[k]), idx.map((k) => b[k]), 0, 2, "none"), boot) }
+            : {}),
+        });
       }
     }
     return { id: criterion.id, raters: stats, agreements };
   });
 
-  return { runId: meta.id, status: meta.status, rubric: meta.rubric.name, labels: meta.labels, raters, failures: resolved.failures.length, criteria };
+  return {
+    runId: meta.id,
+    status: meta.status,
+    rubric: meta.rubric.name,
+    labels: meta.labels,
+    raters,
+    failures: resolved.failures.length,
+    criteria,
+    ...(boot ? { bootstrap: boot } : {}),
+  };
 }
 
 const num = (x: number | null): string => (x === null ? "n/a" : x.toFixed(2));
@@ -150,7 +179,7 @@ export function formatPairReport(report: PairReport): string {
       );
     }
     for (const a of c.agreements) {
-      lines.push(`  ${a.a} vs ${a.b}: n=${a.n}, agree ${pct(a.agreement)}, kappa ${num(a.kappa)}`);
+      lines.push(`  ${a.a} vs ${a.b}: n=${a.n}, agree ${pct(a.agreement)}, kappa ${num(a.kappa)}${formatInterval(a.kappaCI)}`);
     }
   }
   lines.push(
@@ -158,5 +187,6 @@ export function formatPairReport(report: PairReport): string {
     "A win rate = A wins / (A + B wins), ties excluded. flip = pairs where the two presentation orders disagreed (counted as ties).",
     "consist = share of pairs with the same verdict in both orders. 1st-pick = share of non-tie calls that chose the response shown first; far from 50% suggests position bias.",
   );
+  if (report.bootstrap) lines.push("", bootstrapNote(report.bootstrap));
   return `${lines.join("\n")}\n`;
 }

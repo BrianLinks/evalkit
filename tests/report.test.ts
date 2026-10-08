@@ -81,3 +81,55 @@ describe("buildReport", () => {
     expect(constant).toContain("n/a");
   });
 });
+
+describe("bootstrap intervals in the report", () => {
+  const boot = { iterations: 500, confidence: 0.95, seed: 7 };
+
+  it("adds nothing unless requested", () => {
+    const report = buildReport(meta, results);
+    expect(report.bootstrap).toBeUndefined();
+    expect(report.criteria[0].alphaCI).toBeUndefined();
+    expect(report.criteria[0].pairs[0].kappaCI).toBeUndefined();
+    expect(formatReport(report)).not.toContain("bootstrap");
+  });
+
+  it("gives point intervals for perfect and perfectly inverted raters", () => {
+    const report = buildReport(meta, results, { bootstrap: boot });
+    expect(report.bootstrap).toEqual(boot);
+    const a = report.criteria[0];
+    const same = a.pairs.find((p) => p.a === "human" && p.b === "j1");
+    expect(same?.kappaCI?.low).toBeCloseTo(1);
+    expect(same?.kappaCI?.high).toBeCloseTo(1);
+    expect(same?.spearmanCI?.low).toBeCloseTo(1);
+    const inverted = a.pairs.find((p) => p.a === "human" && p.b === "j2");
+    expect(inverted?.spearmanCI?.low).toBeCloseTo(-1);
+    expect(inverted?.spearmanCI?.high).toBeCloseTo(-1);
+    expect(inverted?.kappaCI).not.toBeNull();
+    expect(inverted?.kappaCI?.low as number).toBeLessThanOrEqual(inverted?.kappaCI?.high as number);
+  });
+
+  it("brackets alpha with an interval whose estimate matches the plain alpha", () => {
+    const a = buildReport(meta, results, { bootstrap: boot }).criteria[0];
+    expect(a.alphaCI).not.toBeNull();
+    expect(a.alphaCI?.estimate).toBeCloseTo(a.alpha as number);
+    expect(a.alphaCI?.high as number).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it("is reproducible for a seed", () => {
+    expect(buildReport(meta, results, { bootstrap: boot })).toEqual(buildReport(meta, results, { bootstrap: boot }));
+  });
+
+  it("prints the intervals and how they were made", () => {
+    const text = formatReport(buildReport(meta, results, { bootstrap: boot }));
+    expect(text).toContain("[1.00, 1.00]");
+    expect(text).toContain("95% percentile bootstrap interval over samples (500 resamples, seed 7)");
+  });
+
+  it("shows [n/a] instead of a made-up interval when there is only one sample", () => {
+    const one = results.filter((r) => r.sampleId === "s1");
+    const report = buildReport(meta, one, { bootstrap: boot });
+    expect(report.criteria[0].pairs[0].kappaCI).toBeNull();
+    expect(formatReport(report)).toContain("[n/a]");
+  });
+});
+

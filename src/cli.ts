@@ -10,6 +10,7 @@ import { PairStore } from "./pairwise/store.js";
 import { buildReport, formatReport } from "./report.js";
 import { parseRubric } from "./rubric/parser.js";
 import { executeRun } from "./runner.js";
+import type { BootstrapOptions } from "./stats/bootstrap.js";
 import { RunStore } from "./store.js";
 
 export interface CliIo {
@@ -25,14 +26,18 @@ Usage:
   evalkit rubric check <file>
   evalkit run --rubric <file> --dataset <file.jsonl> --judge <spec> [--judge <spec> ...]
               [--concurrency <n>] [--store <dir>] [--resume <run-id>]
-  evalkit report <run-id> [--json] [--store <dir>]
+              [--bootstrap <n> [--seed <n>]]
+  evalkit report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit runs [--store <dir>]
 
   evalkit compare run --rubric <file> --pairs <file.jsonl> --judge <spec> [--judge <spec> ...]
                       [--label-a <name>] [--label-b <name>] [--concurrency <n>]
-                      [--store <dir>] [--resume <run-id>]
-  evalkit compare report <run-id> [--json] [--store <dir>]
+                      [--store <dir>] [--resume <run-id>] [--bootstrap <n> [--seed <n>]]
+  evalkit compare report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit compare list [--store <dir>]
+
+--bootstrap <n> adds 95% bootstrap intervals (n resamples, 100 to 20000) to kappa, rho and alpha.
+--seed makes them reproducible (default 1).
 
 An interrupted or partly failed run can be continued with --resume <run-id> and the same
 rubric, dataset and judges. Only work without a result yet is redone.
@@ -43,6 +48,21 @@ Runs are stored under .evalkit by default.
 `;
 
 const DEFAULT_STORE = ".evalkit";
+
+const BOOT_OPTIONS = { bootstrap: { type: "string" }, seed: { type: "string" } } as const;
+
+/** Parse --bootstrap <iterations> and --seed <n>. Returns undefined when intervals were not requested. */
+function parseBootstrap(iterations: string | undefined, seed: string | undefined): BootstrapOptions | undefined {
+  if (iterations === undefined) {
+    if (seed !== undefined) throw new UsageError("--seed only makes sense together with --bootstrap");
+    return undefined;
+  }
+  const n = Number(iterations);
+  if (!Number.isInteger(n) || n < 100 || n > 20000) throw new UsageError("--bootstrap must be an integer from 100 to 20000");
+  const s = seed === undefined ? 1 : Number(seed);
+  if (!Number.isInteger(s) || s < 0 || s > 4294967295) throw new UsageError("--seed must be an integer from 0 to 4294967295");
+  return { iterations: n, confidence: 0.95, seed: s };
+}
 
 function parseConcurrency(value: string): number {
   const n = Number(value);
@@ -71,8 +91,10 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
       concurrency: { type: "string", default: "4" },
       store: { type: "string", default: DEFAULT_STORE },
       resume: { type: "string" },
+      ...BOOT_OPTIONS,
     },
   });
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
   if (!values.rubric || !values.dataset) throw new UsageError("run needs --rubric and --dataset");
   const specs = values.judge ?? [];
   if (specs.length === 0) throw new UsageError("run needs at least one --judge (for example mock:a)");
@@ -96,7 +118,7 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
     onStart: (m) => io.err(`run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
   });
   const { results } = await store.load(meta.id);
-  io.out(formatReport(buildReport(meta, results)));
+  io.out(formatReport(buildReport(meta, results, { bootstrap })));
   return meta.status === "failed" ? 1 : 0;
 }
 
@@ -104,11 +126,12 @@ async function reportCommand(args: string[], io: CliIo): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { json: { type: "boolean", default: false }, store: { type: "string", default: DEFAULT_STORE } },
+    options: { json: { type: "boolean", default: false }, store: { type: "string", default: DEFAULT_STORE }, ...BOOT_OPTIONS },
   });
   if (positionals.length !== 1) throw new UsageError("usage: evalkit report <run-id> [--json] [--store <dir>]");
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
   const { meta, results } = await new RunStore(values.store ?? DEFAULT_STORE).load(positionals[0]);
-  const report = buildReport(meta, results);
+  const report = buildReport(meta, results, { bootstrap });
   io.out(values.json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report));
   return 0;
 }
@@ -142,8 +165,10 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
       concurrency: { type: "string", default: "4" },
       store: { type: "string", default: DEFAULT_STORE },
       resume: { type: "string" },
+      ...BOOT_OPTIONS,
     },
   });
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
   if (!values.rubric || !values.pairs) throw new UsageError("compare run needs --rubric and --pairs");
   const specs = values.judge ?? [];
   if (specs.length === 0) throw new UsageError("compare run needs at least one --judge (for example mock:a)");
@@ -168,7 +193,7 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
     onStart: (m) => io.err(`compare run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
   });
   const { rows } = await store.load(meta.id);
-  io.out(formatPairReport(buildPairReport(meta, rows)));
+  io.out(formatPairReport(buildPairReport(meta, rows, { bootstrap })));
   return meta.status === "failed" ? 1 : 0;
 }
 
@@ -176,11 +201,12 @@ async function compareReportCommand(args: string[], io: CliIo): Promise<number> 
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { json: { type: "boolean", default: false }, store: { type: "string", default: DEFAULT_STORE } },
+    options: { json: { type: "boolean", default: false }, store: { type: "string", default: DEFAULT_STORE }, ...BOOT_OPTIONS },
   });
   if (positionals.length !== 1) throw new UsageError("usage: evalkit compare report <run-id> [--json] [--store <dir>]");
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
   const { meta, rows } = await pairStore(values.store).load(positionals[0]);
-  const report = buildPairReport(meta, rows);
+  const report = buildPairReport(meta, rows, { bootstrap });
   io.out(values.json ? `${JSON.stringify(report, null, 2)}\n` : formatPairReport(report));
   return 0;
 }

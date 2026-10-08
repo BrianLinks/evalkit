@@ -163,4 +163,52 @@ describe("cli", () => {
     expect(await main(["compare", "list", "--store", join(store, "none")], empty.io)).toBe(0);
     expect(empty.out()).toBe("no pairwise runs yet\n");
   });
+
+  it("adds reproducible bootstrap intervals with --bootstrap and --seed", async () => {
+    const run = harness();
+    await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "mock:a", "--store", store], run.io);
+    const runId = /run (\S+) started/.exec(run.err())?.[1] as string;
+
+    const plain = harness();
+    await main(["report", runId, "--store", store], plain.io);
+    expect(plain.out()).not.toContain("bootstrap");
+
+    const one = harness();
+    const two = harness();
+    expect(await main(["report", runId, "--bootstrap", "200", "--seed", "5", "--store", store], one.io)).toBe(0);
+    await main(["report", runId, "--bootstrap", "200", "--seed", "5", "--store", store], two.io);
+    expect(one.out()).toBe(two.out());
+    expect(one.out()).toContain("200 resamples, seed 5");
+
+    const json = harness();
+    await main(["report", runId, "--bootstrap", "200", "--json", "--store", store], json.io);
+    const parsed = JSON.parse(json.out());
+    expect(parsed.bootstrap).toEqual({ iterations: 200, confidence: 0.95, seed: 1 });
+    expect("alphaCI" in parsed.criteria[0]).toBe(true);
+    expect("kappaCI" in parsed.criteria[0].pairs[0]).toBe(true);
+  });
+
+  it("accepts --bootstrap on run, compare run and compare report", async () => {
+    const run = harness();
+    expect(await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "mock:a", "--judge", "mock:b", "--bootstrap", "100", "--store", store], run.io)).toBe(0);
+    expect(run.out()).toContain("percentile bootstrap");
+
+    const cmp = harness();
+    expect(await main(["compare", "run", "--rubric", rubric, "--pairs", pairs, "--judge", "mock:a", "--judge", "mock:b", "--bootstrap", "100", "--store", store], cmp.io)).toBe(0);
+    expect(cmp.out()).toContain("percentile bootstrap");
+    const id = /compare run (\S+) started/.exec(cmp.err())?.[1] as string;
+
+    const rep = harness();
+    expect(await main(["compare", "report", id, "--bootstrap", "100", "--seed", "9", "--store", store], rep.io)).toBe(0);
+    expect(rep.out()).toContain("seed 9");
+  });
+
+  it("rejects bad bootstrap settings with a usage error", async () => {
+    for (const extra of [["--bootstrap", "5"], ["--bootstrap", "abc"], ["--bootstrap", "99999"], ["--seed", "3"], ["--bootstrap", "200", "--seed", "-1"], ["--bootstrap", "200", "--seed", "1.5"]]) {
+      const h = harness();
+      const code = await main(["report", "whatever", ...extra, "--store", store], h.io);
+      expect(code, extra.join(" ")).toBe(2);
+    }
+  });
 });
+

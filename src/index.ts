@@ -11,3 +11,4 @@ export { parsePairDataset, type PairSample } from "./pairwise/dataset.js";
 export { PairStore, type PairMeta, type PairRow } from "./pairwise/store.js";
 export { buildPairReport, formatPairReport, type PairReport } from "./pairwise/report.js";
 export { wilsonInterval } from "./stats/proportion.js";
+export { bootstrapInterval, type BootstrapOptions, type Interval } from "./stats/bootstrap.js";

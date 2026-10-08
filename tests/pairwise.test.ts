@@ -177,3 +177,37 @@ describe("pair report", () => {
     expect(meta.status).toBe("completed");
   });
 });
+
+describe("pair report bootstrap", () => {
+  const meta = {
+    id: "r", createdAt: "2026-10-08T00:00:00Z", status: "completed" as const, datasetPath: "d", datasetSha256: "x", rubricSha256: "y",
+    rubric, raters: ["j"], concurrency: 1, labels: { a: "A", b: "B" },
+  };
+  const winners = ["A", "B", "tie", "A", "B", "tie", "A", "B", "tie", "A"] as const;
+  const rows: PairRow[] = [];
+  winners.forEach((w, i) => {
+    const pairId = `p${i}`;
+    rows.push({ pairId, criterionId: "a", rater: "human", kind: "human", winner: w });
+    const judged = i < 8 ? w : w === "A" ? "B" : "A"; // the last two pairs disagree with the human
+    for (const order of ["AB", "BA"] as const) rows.push({ pairId, criterionId: "a", rater: "j", kind: "judge", order, winner: judged });
+  });
+  const boot = { iterations: 300, confidence: 0.95, seed: 3 };
+
+  it("adds an interval around kappa only when asked", () => {
+    expect(buildPairReport(meta, rows).criteria[0].agreements[0].kappaCI).toBeUndefined();
+    const report = buildPairReport(meta, rows, { bootstrap: boot });
+    const agreement = report.criteria[0].agreements[0];
+    expect(agreement).toMatchObject({ n: 10, agreement: 0.8 });
+    expect(agreement.kappaCI).not.toBeNull();
+    expect(agreement.kappaCI?.low as number).toBeLessThan(agreement.kappa as number);
+    expect(agreement.kappaCI?.high as number).toBeGreaterThanOrEqual(agreement.kappa as number);
+    expect(report.bootstrap).toEqual(boot);
+  });
+
+  it("prints the interval and the method note", () => {
+    const text = formatPairReport(buildPairReport(meta, rows, { bootstrap: boot }));
+    expect(text).toMatch(/human vs j: n=10, agree 80%, kappa \d\.\d\d \[/);
+    expect(text).toContain("percentile bootstrap");
+  });
+});
+
