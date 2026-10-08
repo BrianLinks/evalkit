@@ -52,6 +52,23 @@ describe("spearman", () => {
     expect(rho).not.toBeNull();
     expect(rho as number).toBeGreaterThan(0.8);
   });
+  it("gives the same answer on the integer fast path as on the general sorting path", () => {
+    let seed = 12345;
+    const next = (): number => {
+      seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+      return 1 + (seed % 5);
+    };
+    const a = Array.from({ length: 300 }, next);
+    const b = Array.from({ length: 300 }, next);
+    // Adding 0.5 keeps every rank but makes the values non-integers, which forces the sorting path.
+    const general = spearman(a.map((x) => x + 0.5), b.map((x) => x + 0.5));
+    expect(spearman(a, b)).toBeCloseTo(general as number, 12);
+    expect(spearman(a, b)).not.toBeNull();
+  });
+  it("handles negative and wide integer ranges", () => {
+    expect(spearman([-2, -1, 0, 1], [10, 20, 30, 40])).toBeCloseTo(1);
+    expect(spearman([0, 10000, 5, 20000], [1, 2, 3, 4])).toBeCloseTo(0.8); // span > 4096 uses the sorting path
+  });
   it("is null for constant input or fewer than two items", () => {
     expect(spearman([2, 2, 2], [1, 2, 3])).toBeNull();
     expect(spearman([1], [1])).toBeNull();

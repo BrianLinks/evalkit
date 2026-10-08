@@ -71,7 +71,34 @@ export function weightedKappa(
   return 1 - dObserved / dExpected;
 }
 
+/** Largest integer range handled by the counting fast path in averageRanks. */
+const COUNTING_RANK_SPAN = 4096;
+
 function averageRanks(xs: readonly number[]): number[] {
+  // Fast path for small-range integers (rating scales): O(n) by counting instead of sorting.
+  let min = Infinity;
+  let max = -Infinity;
+  let integers = xs.length > 0;
+  for (const x of xs) {
+    if (!Number.isInteger(x)) {
+      integers = false;
+      break;
+    }
+    if (x < min) min = x;
+    if (x > max) max = x;
+  }
+  if (integers && max - min <= COUNTING_RANK_SPAN) {
+    const counts = new Array<number>(max - min + 1).fill(0);
+    for (const x of xs) counts[x - min]++;
+    const rankOf = new Array<number>(counts.length);
+    let below = 0;
+    for (let v = 0; v < counts.length; v++) {
+      rankOf[v] = below + (counts[v] + 1) / 2; // average of ranks below+1 .. below+count
+      below += counts[v];
+    }
+    return xs.map((x) => rankOf[x - min]);
+  }
+
   const order = xs.map((value, index) => ({ value, index })).sort((p, q) => p.value - q.value);
   const ranks = new Array<number>(xs.length);
   let i = 0;
