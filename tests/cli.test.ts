@@ -210,5 +210,62 @@ describe("cli", () => {
       expect(code, extra.join(" ")).toBe(2);
     }
   });
-});
 
+  it("runs the length-bias check on a score run and refuses a different dataset", async () => {
+    const run = harness();
+    await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "mock:a", "--judge", "mock:b", "--store", store], run.io);
+    const runId = /run (\S+) started/.exec(run.err())?.[1] as string;
+
+    const bias = harness();
+    expect(await main(["bias", runId, "--dataset", dataset, "--store", store], bias.io)).toBe(0);
+    expect(bias.out()).toContain(`Length bias for run ${runId} (length measured in words)`);
+    expect(bias.out()).toContain("rho(length, score)");
+    expect(bias.out()).toContain("gap vs human");
+
+    const chars = harness();
+    expect(await main(["bias", runId, "--dataset", dataset, "--unit", "chars", "--bootstrap", "100", "--store", store], chars.io)).toBe(0);
+    expect(chars.out()).toContain("measured in chars");
+    expect(chars.out()).toContain("percentile bootstrap");
+
+    const json = harness();
+    await main(["bias", runId, "--dataset", dataset, "--json", "--store", store], json.io);
+    const parsed = JSON.parse(json.out());
+    expect(parsed.unit).toBe("words");
+    expect(parsed.hasHuman).toBe(true);
+    expect(parsed.criteria).toHaveLength(3);
+
+    const wrong = harness();
+    expect(await main(["bias", runId, "--dataset", pairs, "--store", store], wrong.io)).toBe(1);
+    expect(wrong.err()).toContain("not the dataset run");
+  });
+
+  it("runs the length-bias check on a pairwise run", async () => {
+    const run = harness();
+    await main(["compare", "run", "--rubric", rubric, "--pairs", pairs, "--judge", "mock:a", "--store", store], run.io);
+    const runId = /compare run (\S+) started/.exec(run.err())?.[1] as string;
+
+    const bias = harness();
+    expect(await main(["compare", "bias", runId, "--pairs", pairs, "--min-diff", "0.2", "--store", store], bias.io)).toBe(0);
+    expect(bias.out()).toContain(`Length bias for pairwise run ${runId}`);
+    expect(bias.out()).toContain("longer response wins");
+    expect(bias.out()).toContain("at least 20%");
+
+    const wrong = harness();
+    expect(await main(["compare", "bias", runId, "--pairs", dataset, "--store", store], wrong.io)).toBe(1);
+  });
+
+  it("gives usage errors for the bias commands and checks flags before reading the store", async () => {
+    for (const argv of [
+      ["bias"], ["bias", "x"], ["bias", "x", "--dataset", dataset, "--unit", "lines"], ["bias", "x", "--dataset", dataset, "--bootstrap", "5"],
+      ["compare", "bias", "x"], ["compare", "bias", "x", "--pairs", pairs, "--unit", "lines"],
+      ["compare", "bias", "x", "--pairs", pairs, "--min-diff", "1"], ["compare", "bias", "x", "--pairs", pairs, "--min-diff", "abc"],
+      ["compare", "bias", "x", "--pairs", pairs, "--min-diff", "-0.1"],
+    ]) {
+      const h = harness();
+      expect(await main([...argv, "--store", store], h.io), argv.join(" ")).toBe(2);
+    }
+    const unknown = harness();
+    expect(await main(["bias", "nope", "--dataset", dataset, "--store", store], unknown.io)).toBe(1);
+    expect(unknown.err()).toContain("not found");
+  });
+});

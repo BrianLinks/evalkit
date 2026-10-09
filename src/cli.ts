@@ -1,5 +1,8 @@
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { assertDatasetMatches, type LengthUnit } from "./bias/length.js";
+import { buildPairLengthBias, formatPairLengthBias } from "./bias/pairBias.js";
+import { buildLengthBias, formatLengthBias } from "./bias/scoreBias.js";
 import { parseDataset, readTextFile } from "./dataset.js";
 import { EvalKitError, UsageError } from "./errors.js";
 import { createJudge } from "./judges/index.js";
@@ -29,12 +32,19 @@ Usage:
               [--bootstrap <n> [--seed <n>]]
   evalkit report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit runs [--store <dir>]
+  evalkit bias <run-id> --dataset <file.jsonl> [--unit words|chars] [--json] [--store <dir>]
+               [--bootstrap <n> [--seed <n>]]
 
   evalkit compare run --rubric <file> --pairs <file.jsonl> --judge <spec> [--judge <spec> ...]
                       [--label-a <name>] [--label-b <name>] [--concurrency <n>]
                       [--store <dir>] [--resume <run-id>] [--bootstrap <n> [--seed <n>]]
   evalkit compare report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit compare list [--store <dir>]
+  evalkit compare bias <run-id> --pairs <file.jsonl> [--unit words|chars] [--min-diff <0-1>]
+                       [--json] [--store <dir>]
+
+bias checks whether judges favour longer responses. Pass the original dataset file; it must be the
+exact file the run used, because runs do not store response text.
 
 --bootstrap <n> adds 95% bootstrap intervals (n resamples, 100 to 20000) to kappa, rho and alpha.
 --seed makes them reproducible (default 1).
@@ -225,6 +235,69 @@ async function compareListCommand(args: string[], io: CliIo): Promise<number> {
   return 0;
 }
 
+function parseUnit(value: string | undefined): LengthUnit {
+  if (value === undefined || value === "words") return "words";
+  if (value === "chars") return "chars";
+  throw new UsageError("--unit must be words or chars");
+}
+
+function parseMinDiff(value: string | undefined): number {
+  if (value === undefined) return 0.1;
+  const n = Number(value);
+  if (value.trim() === "" || !Number.isFinite(n) || n < 0 || n >= 1) throw new UsageError("--min-diff must be a number from 0 up to (not including) 1");
+  return n;
+}
+
+async function biasCommand(args: string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      dataset: { type: "string" },
+      unit: { type: "string", default: "words" },
+      json: { type: "boolean", default: false },
+      store: { type: "string", default: DEFAULT_STORE },
+      ...BOOT_OPTIONS,
+    },
+  });
+  if (positionals.length !== 1 || !values.dataset) {
+    throw new UsageError("usage: evalkit bias <run-id> --dataset <file.jsonl> [--unit words|chars] [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]");
+  }
+  const unit = parseUnit(values.unit);
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
+  const { meta, results } = await new RunStore(values.store ?? DEFAULT_STORE).load(positionals[0]);
+  const text = await readTextFile(values.dataset);
+  assertDatasetMatches(meta, text);
+  const report = buildLengthBias(meta, results, parseDataset(text), { unit, bootstrap });
+  io.out(values.json ? `${JSON.stringify(report, null, 2)}\n` : formatLengthBias(report));
+  return 0;
+}
+
+async function compareBiasCommand(args: string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      pairs: { type: "string" },
+      unit: { type: "string", default: "words" },
+      "min-diff": { type: "string" },
+      json: { type: "boolean", default: false },
+      store: { type: "string", default: DEFAULT_STORE },
+    },
+  });
+  if (positionals.length !== 1 || !values.pairs) {
+    throw new UsageError("usage: evalkit compare bias <run-id> --pairs <file.jsonl> [--unit words|chars] [--min-diff <0-1>] [--json] [--store <dir>]");
+  }
+  const unit = parseUnit(values.unit);
+  const minDiff = parseMinDiff(values["min-diff"]);
+  const { meta, rows } = await pairStore(values.store).load(positionals[0]);
+  const text = await readTextFile(values.pairs);
+  assertDatasetMatches(meta, text);
+  const report = buildPairLengthBias(meta, rows, parsePairDataset(text), { unit, minDiff });
+  io.out(values.json ? `${JSON.stringify(report, null, 2)}\n` : formatPairLengthBias(report));
+  return 0;
+}
+
 async function compareCommand(args: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = args;
   switch (sub) {
@@ -234,8 +307,10 @@ async function compareCommand(args: string[], io: CliIo): Promise<number> {
       return compareReportCommand(rest, io);
     case "list":
       return compareListCommand(rest, io);
+    case "bias":
+      return compareBiasCommand(rest, io);
     default:
-      throw new UsageError("usage: evalkit compare run|report|list ...");
+      throw new UsageError("usage: evalkit compare run|report|list|bias ...");
   }
 }
 
@@ -252,6 +327,8 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
         return await reportCommand(rest, io);
       case "runs":
         return await runsCommand(rest, io);
+      case "bias":
+        return await biasCommand(rest, io);
       case "compare":
         return await compareCommand(rest, io);
       case undefined:
