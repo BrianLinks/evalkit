@@ -2,7 +2,7 @@
 
 Score LLM outputs against a rubric using LLM judges, compare two systems head to head, and measure how much the judges agree with each other and with human scores.
 
-You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, and agreement statistics can come with bootstrap confidence intervals.
+You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, agreement statistics can come with bootstrap confidence intervals, and a bias check shows whether judges favour longer answers.
 
 ## Quick start
 
@@ -107,6 +107,34 @@ Things to know:
 - These are plain percentile intervals with no bias correction. With fewer than about 20 samples they can be too narrow, so treat them as rough. A wide interval is the honest answer on a small dataset.
 - Cost grows with resamples and samples. In one test, 1000 resamples over 3,000 samples, 3 criteria and 3 raters took about 4 seconds.
 - Win rates in pairwise mode already use Wilson intervals and are unaffected by this flag.
+
+## Checking for length bias
+
+LLM judges often rate longer answers higher. `bias` checks whether yours do, using a run you already have. Pass the original dataset file, because runs do not store response text. EvalKit checks the file is byte-for-byte the one the run used and refuses otherwise.
+
+For a score run:
+
+```sh
+node dist/bin.js bias <run-id> --dataset examples/sample.jsonl --bootstrap 1000
+```
+
+For each criterion it shows, per rater, the Spearman correlation between response length and score, and for each judge the gap versus the human on the same samples (judge correlation minus human correlation). Longer answers are often genuinely better, so a high correlation alone is not bias. A positive gap means the judge follows length more than people do. A `!` appears only when the bootstrap interval for the gap lies entirely above 0, so it needs `--bootstrap` and human scores in the dataset.
+
+For a pairwise run:
+
+```sh
+node dist/bin.js compare bias <run-id> --pairs examples/pairs.jsonl
+```
+
+This shows how often the longer response wins, with a Wilson interval, and the same rate restricted to pairs the human called a tie. A judge that picks the longer response well above 50% of the time where the human saw no difference is preferring length. A `!` marks that case (interval above 50%). Pairs whose lengths differ by less than `--min-diff` (default 0.1, meaning 10%) are ignored, and so are ties and pairs where the judge changed its answer between orders.
+
+Both commands take `--unit words` (default) or `--unit chars`. See [ADR 0007](docs/adr/0007-length-bias-against-human-baseline.md).
+
+What this does not tell you:
+- It measures length only, not other style effects such as formatting, confidence or politeness.
+- A `!` is a warning from a rule, not a proof. It does not correct for running many comparisons, so with several judges and criteria one may appear by chance. Check it against more data before acting on it.
+- Without human scores or preferences it can show correlations but cannot separate length bias from real quality differences.
+- Small datasets give wide intervals and usually no flag. That is the honest result, not a pass.
 
 ## Reading the report
 

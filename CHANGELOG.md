@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 - 2026-10-09
+
+- Length-bias checks: `evalkit bias <run-id> --dataset <file>` for score runs and `evalkit compare bias <run-id> --pairs <file>` for pairwise runs. Both compare judges to the human baseline, flag only on an interval above the null, and refuse a dataset that does not match the run's hash.
+- `--unit words|chars` and, for pairwise, `--min-diff`.
+- Internal: shared `finalDecisions` helper for pairwise verdicts.
+
 ## 0.3.0 - 2026-10-08
 
 - Bootstrap confidence intervals: `--bootstrap <n>` and `--seed <n>` on `run`, `report`, `compare run` and `compare report`. Intervals for kappa, Spearman rho and Krippendorff alpha (kappa in pairwise mode). Shown as `[n/a]` when not trustworthy.
