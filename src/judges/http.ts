@@ -17,6 +17,18 @@ export const DEFAULT_HTTP: HttpOptions = {
 };
 
 /**
+ * Safe description of why fetch threw: the error name and, if present, the system error code
+ * (ENOTFOUND, ECONNRESET, ...). Never the error message, because some runtimes put the rejected
+ * header value, which is the API key, into the message of an "invalid header" TypeError.
+ */
+function describeFetchError(e: unknown): string {
+  if (!(e instanceof Error)) return "unknown";
+  const cause = e.cause as { code?: unknown } | undefined;
+  const code = typeof cause?.code === "string" && /^[A-Z][A-Z0-9_]+$/.test(cause.code) ? cause.code : undefined;
+  return code ? `${e.name}, ${code}` : e.name;
+}
+
+/**
  * POST JSON and return the parsed body. Retries network errors, 429 and 5xx with exponential backoff.
  * Other 4xx responses fail immediately. Error messages never include request headers, so API keys stay out of logs.
  */
@@ -39,7 +51,7 @@ export async function postJson(
         signal: AbortSignal.timeout(options.timeoutMs),
       });
     } catch (e) {
-      last = new HttpError(`network error (${e instanceof Error ? e.name : "unknown"})`);
+      last = new HttpError(`request failed before a response arrived (${describeFetchError(e)})`);
       continue;
     }
 

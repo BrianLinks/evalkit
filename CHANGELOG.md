@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 - 2026-10-09
+
+- Fix: a key containing spaces or non-ASCII characters is now rejected up front with a clear message, instead of failing every call. Leading and trailing whitespace is trimmed.
+- Fix: failed requests now report the system error code (for example ENOTFOUND or ECONNRESET) instead of only "network error (TypeError)". The error message itself is never included, because some runtimes put the API key in it.
+
 ## 0.4.0 - 2026-10-09
 
 - Length-bias checks: `evalkit bias <run-id> --dataset <file>` for score runs and `evalkit compare bias <run-id> --pairs <file>` for pairwise runs. Both compare judges to the human baseline, flag only on an interval above the null, and refuse a dataset that does not match the run's hash.

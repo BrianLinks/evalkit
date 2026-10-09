@@ -23,8 +23,12 @@ export function createJudge(spec: string, options: JudgeFactoryOptions): Provide
   const http: HttpOptions = { ...DEFAULT_HTTP, ...options.http, fetch: options.fetch ?? options.http?.fetch ?? DEFAULT_HTTP.fetch };
 
   const requireKey = (name: string): string => {
-    const key = options.env[name];
+    const key = options.env[name]?.trim();
     if (!key) throw new ConfigError(`${name} is not set (needed for judge "${spec}")`);
+    // A key with a space, quote-free but odd character, or non-ASCII text makes fetch throw before sending anything.
+    if (!/^[\x21-\x7e]+$/.test(key)) {
+      throw new ConfigError(`${name} contains spaces or characters that cannot be sent in an HTTP header; paste the key again with nothing else`);
+    }
     return key;
   };
 

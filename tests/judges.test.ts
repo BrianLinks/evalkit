@@ -84,6 +84,17 @@ describe("postJson", () => {
     await expect(postJson("https://x", {}, {}, http(f))).rejects.toThrow(/HTTP 401/);
     expect(calls).toHaveLength(1);
   });
+  it("names the system error code when fetch fails, but never echoes the error message", async () => {
+    const withCode = Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } });
+    const a = await postJson("https://x", {}, {}, { ...http(fakeFetch([withCode]).fetch), retries: 0 }).catch((e: Error) => e);
+    expect((a as Error).message).toBe("request failed before a response arrived (TypeError, ENOTFOUND)");
+
+    // Some runtimes put the rejected header value (the API key) into this message.
+    const leaky = new TypeError('Headers.append: "sk-secret-123" is an invalid header value.');
+    const b = await postJson("https://x", { "x-api-key": "sk-secret-123" }, {}, { ...http(fakeFetch([leaky]).fetch), retries: 0 }).catch((e: Error) => e);
+    expect((b as Error).message).toBe("request failed before a response arrived (TypeError)");
+    expect((b as Error).message).not.toContain("sk-secret");
+  });
   it("gives up after the retry budget and retries network errors", async () => {
     const { fetch: f, calls } = fakeFetch([new TypeError("boom")]);
     await expect(postJson("https://x", {}, {}, { ...http(f), retries: 2 })).rejects.toThrow(HttpError);
@@ -118,6 +129,27 @@ describe("providers", () => {
     const { fetch: f } = fakeFetch([json({ nope: true })]);
     const judge = createJudge("anthropic:m", { env: { ANTHROPIC_API_KEY: "k" }, fetch: f });
     await expect(judge.judge({ rubric, criterion, sample })).rejects.toThrow(/unexpected Anthropic response/);
+  });
+});
+
+describe("createJudge keys", () => {
+  it("trims whitespace around a pasted key", async () => {
+    const { fetch: f, calls } = fakeFetch([json({ content: [{ type: "text", text: '{"score": 4}' }] })]);
+    const judge = createJudge("anthropic:m", { env: { ANTHROPIC_API_KEY: "  sk-abc123 \r\n" }, fetch: f });
+    await judge.judge({ rubric, criterion, sample });
+    expect(calls[0].headers["x-api-key"]).toBe("sk-abc123");
+  });
+  it("rejects a key that could not be sent, without printing it", () => {
+    for (const bad of ["sk-abc def", "sk-\u00e9clair", "sk-abc\u200b", "   "]) {
+      let message = "";
+      try {
+        createJudge("anthropic:m", { env: { ANTHROPIC_API_KEY: bad } });
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message, JSON.stringify(bad)).toMatch(/not set|cannot be sent/);
+      expect(message).not.toContain("sk-");
+    }
   });
 });
 
