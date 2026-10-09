@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 - 2026-10-09
+
+- Early stop: after 3 identical fatal errors in a row from a judge (rejected key, no permission, unknown model, billing or quota problem), EvalKit stops sending that judge requests, says why immediately, and marks the run `halted`. Applies to `run` and `compare run`.
+- Halted runs show `HALTED EARLY` with the reason and the exact `--resume` command in the report, exit with code 1, and are resumable. Resuming clears the halt.
+- New run status `halted` and a `halted` field in run metadata and JSON reports.
+- `counts.failed` now counts every task without a result, including tasks skipped after a halt.
+
 ## 0.4.1 - 2026-10-09
 
 - Fix: a key containing spaces or non-ASCII characters is now rejected up front with a clear message, instead of failing every call. Leading and trailing whitespace is trimmed.

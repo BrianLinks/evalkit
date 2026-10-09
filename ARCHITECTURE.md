@@ -20,6 +20,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 | `src/rubric/` | `schema.ts` is the zod schema and cross-field rules. `parser.ts` turns the line-based DSL into that schema, with line numbers in errors. |
 | `src/dataset.ts` | Parses JSONL samples and checks human scores against the rubric. |
 | `src/judges/` | `types.ts` defines `Judge` (score), `PairJudge` (compare) and `Completer` (raw text). `prompt.ts` builds prompts and parses replies for both. `llm.ts` turns any `Completer` into a judge. `http.ts` is the retrying POST helper. `anthropic.ts` and `openai.ts` are completers; `mock.ts` is offline. `index.ts` is the factory. |
+| `src/breaker.ts` | `fatalReason` classifies errors that will recur for every call (bad key, no permission, unknown model, billing). `FatalBreaker` halts one judge after N identical ones in a row. Used by both runners. |
 | `src/runner.ts` | Expands samples × criteria × judges into tasks, runs them through a bounded worker pool, records each outcome. |
 | `src/fileStore.ts` | Generic file-based run store: `meta.json` plus append-only `results.jsonl` per run, validated on every read. |
 | `src/store.ts` | `RunStore` for score runs, and `resolveResults`, which collapses the log to its current state (latest success wins). |
@@ -34,7 +35,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 
 - Anything that crosses a boundary (rubric text, dataset lines, judge replies, stored files, API responses) is validated with zod or an explicit check before use.
 - Result files are append-only. The current state of a run is always derived by resolving the log (latest success per key wins), never by editing it.
-- One judge failure never aborts a run. It is stored as an error row and counted. A run is marked `failed` only when every task failed.
+- One judge failure never aborts a run. Repeated fatal errors halt only that judge, and a halted run is resumable. It is stored as an error row and counted. A run is marked `failed` only when every task failed.
 - Statistics return `null` when they are undefined. Nothing is silently turned into 0. A bootstrap interval is `null` rather than a guess when too many resamples are undefined.
 - Randomness is seeded and local to the call, so the same input, flags and seed always produce the same report.
 - Run ids are validated before they touch the filesystem.

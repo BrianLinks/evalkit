@@ -66,6 +66,19 @@ node dist/bin.js run --rubric examples/helpfulness.rubric --dataset examples/sam
 
 Only work without a successful result is redone, and earlier failures are retried. The rubric, dataset and judge list must be identical to the original run, otherwise EvalKit stops and tells you to start a new run, because mixing results from different inputs would make the statistics meaningless. See [ADR 0004](docs/adr/0004-append-only-log-resume.md).
 
+## Stopping early when the provider rejects everything
+
+Some errors mean every further call will fail too: a rejected key (401), no permission (403), an unknown model (404), or a billing or quota problem (no credit). After 3 identical errors of that kind in a row from one judge, EvalKit stops sending requests to that judge, prints why straight away, and marks the run `halted`. Other judges keep going. Nothing is lost: the finished results are saved, and once you fix the cause you continue with `--resume <run-id>` as above, which clears the halt.
+
+```
+stopped sending requests to anthropic:claude-sonnet-5-5: billing or quota problem (HTTP 400): add credit or raise the limit
+...
+HALTED EARLY: anthropic:claude-sonnet-5-5 stopped, billing or quota problem (HTTP 400): add credit or raise the limit
+Fix the cause, then continue with: evalkit run ... --resume <run-id>
+```
+
+Only provider rejections of the key, model or account count. Rate limits, timeouts, dropped connections, server errors and a bad request for one sample never trigger a halt, and a success or a different error resets the count. A halted run exits with code 1. The threshold is 3 by default; library users can change it with `haltAfter`. See [ADR 0008](docs/adr/0008-halt-on-fatal-errors.md).
+
 ## Pairwise comparison
 
 Compare two systems (A and B) on the same prompts. Each judge sees every pair twice, once with A first and once with B first, for every rubric criterion. A verdict only counts when both orders agree; otherwise it is recorded as a tie and counted as a flip. That is how EvalKit measures position bias instead of silently absorbing it. See [ADR 0005](docs/adr/0005-pairwise-both-orders.md).
@@ -145,6 +158,7 @@ For each criterion you get mean score per rater, Krippendorff's alpha across all
 - Judge calls do not set a temperature, because some current models reject it. Repeat a run and compare, or use two judges, to see how stable a judge is.
 - The Anthropic and OpenAI judges are covered by tests that use a fake `fetch`. They have not been exercised against the live APIs by the author.
 - Pairwise mode compares exactly two systems. Weights in the rubric are ignored there, and there is no overall winner across criteria.
+- Early stop is judged from the error text and status code the provider returns. A provider that words a billing error in a way EvalKit does not recognise will simply keep failing as before, and the run will not halt.
 - A resumed run must use the same judges. Adding a judge to an existing run is not supported.
 - Two processes writing to the same run at once is not supported.
 
