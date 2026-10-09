@@ -46,12 +46,18 @@ export class PairStore extends FileStore<PairMeta, PairRow> {
     return meta;
   }
 
-  finish(id: string, status: "completed" | "failed", counts: { tasks: number; failed: number }, now: Date = new Date()): Promise<PairMeta> {
-    return this.update(id, (m) => ({ ...m, status, counts, finishedAt: now.toISOString() }));
+  finish(
+    id: string,
+    status: "completed" | "failed" | "halted",
+    counts: { tasks: number; failed: number },
+    now: Date = new Date(),
+    halted: { judge: string; reason: string }[] = [],
+  ): Promise<PairMeta> {
+    return this.update(id, (m) => ({ ...m, status, counts, finishedAt: now.toISOString(), halted: halted.length > 0 ? halted : undefined }));
   }
 
   reopen(id: string): Promise<PairMeta> {
-    return this.update(id, (m) => ({ ...m, status: "running", finishedAt: undefined, resumes: (m.resumes ?? 0) + 1 }));
+    return this.update(id, (m) => ({ ...m, status: "running", finishedAt: undefined, halted: undefined, resumes: (m.resumes ?? 0) + 1 }));
   }
 
   async load(id: string): Promise<{ meta: PairMeta; rows: PairRow[] }> {

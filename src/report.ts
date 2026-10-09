@@ -1,5 +1,6 @@
 import { krippendorffAlphaInterval, mean, percentAgreement, spearman, weightedKappa } from "./stats/agreement.js";
 import { bootstrapInterval, pick, type BootstrapOptions, type Interval } from "./stats/bootstrap.js";
+import type { Halt } from "./breaker.js";
 import { resolveResults, type ResultRecord, type RunMeta } from "./store.js";
 
 export interface PairStats {
@@ -38,6 +39,8 @@ export interface RunReport {
   overall: Record<string, number | null>;
   /** Settings used for the intervals, when requested. */
   bootstrap?: BootstrapOptions;
+  /** Judges stopped early, with the reason. Present only when that happened. */
+  halted?: Halt[];
 }
 
 export interface ReportOptions {
@@ -151,6 +154,7 @@ export function buildReport(meta: RunMeta, results: readonly ResultRecord[], opt
     criteria,
     overall,
     ...(boot ? { bootstrap: boot } : {}),
+    ...(meta.halted ? { halted: meta.halted } : {}),
   };
 }
 
@@ -174,12 +178,22 @@ function renderTable(header: string[], rows: string[][]): string[] {
   return [line(header), ...rows.map(line)];
 }
 
+/** Lines explaining a halted run and how to continue it; empty when nothing was halted. */
+export function haltLines(halted: Halt[] | undefined, runId: string, command: string): string[] {
+  if (!halted || halted.length === 0) return [];
+  return [
+    ...halted.map((h) => `HALTED EARLY: ${h.judge} stopped, ${h.reason}`),
+    `Fix the cause, then continue with: evalkit ${command} ... --resume ${runId}`,
+  ];
+}
+
 export function formatReport(report: RunReport): string {
   const lines: string[] = [];
   lines.push(`Run ${report.runId} (${report.status})`);
   lines.push(`Rubric: ${report.rubric} (scale ${report.scale.min}..${report.scale.max})`);
   lines.push(`Raters: ${report.raters.join(", ") || "none"}`);
   lines.push(`Unresolved judge failures: ${report.failures}`);
+  lines.push(...haltLines(report.halted, report.runId, "run"));
 
   for (const c of report.criteria) {
     lines.push("", `Criterion: ${c.id} (weight ${c.weight})`);

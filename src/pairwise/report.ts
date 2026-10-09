@@ -1,7 +1,8 @@
 import { percentAgreement, weightedKappa } from "../stats/agreement.js";
 import { bootstrapInterval, type BootstrapOptions, type Interval } from "../stats/bootstrap.js";
 import { wilsonInterval } from "../stats/proportion.js";
-import { bootstrapNote, formatInterval } from "../report.js";
+import type { Halt } from "../breaker.js";
+import { bootstrapNote, formatInterval, haltLines } from "../report.js";
 import { resolvePairRows, type DecidedPairRow, type PairMeta, type PairRow } from "./store.js";
 
 export type Winner = "A" | "B" | "tie";
@@ -57,6 +58,8 @@ export interface PairReport {
   criteria: PairCriterionReport[];
   /** Settings used for the intervals, when requested. */
   bootstrap?: BootstrapOptions;
+  /** Judges stopped early, with the reason. Present only when that happened. */
+  halted?: Halt[];
 }
 
 export interface PairReportOptions {
@@ -177,6 +180,7 @@ export function buildPairReport(meta: PairMeta, rows: readonly PairRow[], option
     failures: resolved.failures.length,
     criteria,
     ...(boot ? { bootstrap: boot } : {}),
+    ...(meta.halted ? { halted: meta.halted } : {}),
   };
 }
 
@@ -190,6 +194,7 @@ export function formatPairReport(report: PairReport): string {
   lines.push(`A = ${report.labels.a}, B = ${report.labels.b}`);
   lines.push(`Raters: ${report.raters.join(", ") || "none"}`);
   lines.push(`Unresolved judge failures: ${report.failures}`);
+  lines.push(...haltLines(report.halted, report.runId, "compare run"));
 
   for (const c of report.criteria) {
     lines.push("", `Criterion: ${c.id}`);

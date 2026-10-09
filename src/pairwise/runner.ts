@@ -1,3 +1,4 @@
+import { FatalBreaker, type Halt } from "../breaker.js";
 import { ConfigError, errorMessage } from "../errors.js";
 import type { PairJudge } from "../judges/types.js";
 import { pool } from "../pool.js";
@@ -17,6 +18,9 @@ export interface PairExecuteOptions {
   labels?: { a: string; b: string };
   resume?: string;
   onStart?: (meta: PairMeta) => void;
+  /** Stop sending requests to a judge after this many identical fatal errors in a row. Default 3. */
+  haltAfter?: number;
+  onHalt?: (halt: Halt) => void;
   now?: () => Date;
 }
 
@@ -46,6 +50,8 @@ export async function executePairwiseRun(options: PairExecuteOptions): Promise<P
   const ids = judges.map((j) => j.id);
   if (new Set(ids).size !== ids.length) throw new ConfigError("the same judge was listed twice");
   if (!Number.isInteger(options.concurrency) || options.concurrency < 1) throw new ConfigError("concurrency must be a positive integer");
+  const haltAfter = options.haltAfter ?? 3;
+  if (!Number.isInteger(haltAfter) || haltAfter < 1) throw new ConfigError("haltAfter must be a positive integer");
 
   const datasetSha256 = sha256(options.datasetText);
   const rubricSha256 = sha256(JSON.stringify(rubric));
@@ -84,6 +90,8 @@ export async function executePairwiseRun(options: PairExecuteOptions): Promise<P
     }
   }
 
+  const breaker = new FatalBreaker(haltAfter, options.onHalt);
+
   try {
     for (const pair of pairs) {
       for (const [criterionId, winner] of Object.entries(pair.human ?? {})) {
@@ -93,6 +101,7 @@ export async function executePairwiseRun(options: PairExecuteOptions): Promise<P
     }
 
     await pool(tasks, options.concurrency, async ({ pair, criterionIndex, judge, order }) => {
+      if (breaker.isHalted(judge.id)) return;
       const criterion = rubric.criteria[criterionIndex];
       const base = { pairId: pair.id, criterionId: criterion.id, rater: judge.id, kind: "judge" as const, order };
       try {
@@ -103,7 +112,9 @@ export async function executePairwiseRun(options: PairExecuteOptions): Promise<P
         const secondSystem = order === "AB" ? "B" : "A";
         const winner = verdict.winner === "first" ? firstSystem : verdict.winner === "second" ? secondSystem : "tie";
         await store.append(meta.id, { ...base, winner, rationale: verdict.rationale });
+        breaker.recordSuccess(judge.id);
       } catch (e) {
+        breaker.recordFailure(judge.id, e);
         await store.append(meta.id, { ...base, error: errorMessage(e) });
       }
     });
@@ -114,6 +125,7 @@ export async function executePairwiseRun(options: PairExecuteOptions): Promise<P
 
   const resolved = resolvePairRows(await store.loadRows(meta.id));
   const judgeDecided = resolved.ok.filter((r) => r.kind === "judge").length;
-  const status = total > 0 && judgeDecided === 0 ? "failed" : "completed";
-  return store.finish(meta.id, status, { tasks: total, failed: resolved.failures.length }, now());
+  const halted = breaker.halted;
+  const status = halted.length > 0 ? "halted" : total > 0 && judgeDecided === 0 ? "failed" : "completed";
+  return store.finish(meta.id, status, { tasks: total, failed: total - judgeDecided }, now(), halted);
 }

@@ -126,10 +126,11 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
     datasetText,
     resume: values.resume,
     onStart: (m) => io.err(`run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
+    onHalt: (h) => io.err(`stopped sending requests to ${h.judge}: ${h.reason}\n`),
   });
   const { results } = await store.load(meta.id);
   io.out(formatReport(buildReport(meta, results, { bootstrap })));
-  return meta.status === "failed" ? 1 : 0;
+  return meta.status === "failed" || meta.status === "halted" ? 1 : 0;
 }
 
 async function reportCommand(args: string[], io: CliIo): Promise<number> {
@@ -201,10 +202,11 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
     labels: { a: values["label-a"] ?? "A", b: values["label-b"] ?? "B" },
     resume: values.resume,
     onStart: (m) => io.err(`compare run ${m.id} started (if interrupted, continue with --resume ${m.id})\n`),
+    onHalt: (h) => io.err(`stopped sending requests to ${h.judge}: ${h.reason}\n`),
   });
   const { rows } = await store.load(meta.id);
   io.out(formatPairReport(buildPairReport(meta, rows, { bootstrap })));
-  return meta.status === "failed" ? 1 : 0;
+  return meta.status === "failed" || meta.status === "halted" ? 1 : 0;
 }
 
 async function compareReportCommand(args: string[], io: CliIo): Promise<number> {

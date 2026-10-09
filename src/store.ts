@@ -19,7 +19,7 @@ export const metaShape = {
   id: z.string(),
   createdAt: z.string(),
   finishedAt: z.string().optional(),
-  status: z.enum(["running", "completed", "failed"]),
+  status: z.enum(["running", "completed", "failed", "halted"]),
   datasetPath: z.string(),
   datasetSha256: z.string(),
   rubricSha256: z.string(),
@@ -29,6 +29,8 @@ export const metaShape = {
   counts: z.object({ tasks: z.number().int(), failed: z.number().int() }).optional(),
   /** How many times this run was resumed. */
   resumes: z.number().int().optional(),
+  /** Judges that were stopped early because every request was being rejected. */
+  halted: z.array(z.object({ judge: z.string(), reason: z.string() })).optional(),
 };
 
 export const RunMetaSchema = z.object(metaShape);
@@ -76,13 +78,19 @@ export class RunStore extends FileStore<RunMeta, ResultRecord> {
     return meta;
   }
 
-  finish(id: string, status: "completed" | "failed", counts: { tasks: number; failed: number }, now: Date = new Date()): Promise<RunMeta> {
-    return this.update(id, (m) => ({ ...m, status, counts, finishedAt: now.toISOString() }));
+  finish(
+    id: string,
+    status: "completed" | "failed" | "halted",
+    counts: { tasks: number; failed: number },
+    now: Date = new Date(),
+    halted: { judge: string; reason: string }[] = [],
+  ): Promise<RunMeta> {
+    return this.update(id, (m) => ({ ...m, status, counts, finishedAt: now.toISOString(), halted: halted.length > 0 ? halted : undefined }));
   }
 
   /** Mark a run as running again so it can be resumed. */
   reopen(id: string): Promise<RunMeta> {
-    return this.update(id, (m) => ({ ...m, status: "running", finishedAt: undefined, resumes: (m.resumes ?? 0) + 1 }));
+    return this.update(id, (m) => ({ ...m, status: "running", finishedAt: undefined, halted: undefined, resumes: (m.resumes ?? 0) + 1 }));
   }
 
   loadResults(id: string): Promise<ResultRecord[]> {

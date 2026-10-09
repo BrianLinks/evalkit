@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseDataset } from "../src/dataset.js";
 import { mockJudge } from "../src/judges/mock.js";
 import type { Judge } from "../src/judges/types.js";
+import { HttpError } from "../src/errors.js";
 import { executeRun } from "../src/runner.js";
 import { parseRubric } from "../src/rubric/parser.js";
 import { RunStore, sha256 } from "../src/store.js";
@@ -183,6 +184,95 @@ describe("executeRun", () => {
       await expect(executeRun({ ...makeBase(), rubric: otherRubric, judges: [mockJudge("a")], resume: first.id })).rejects.toThrow(/rubric changed/);
       await expect(executeRun({ ...makeBase(), judges: [mockJudge("b")], resume: first.id })).rejects.toThrow(/judges must match/);
       await expect(executeRun({ ...makeBase(), judges: [mockJudge("a")], resume: "nope" })).rejects.toThrow(/not found/);
+    });
+  });
+
+  describe("early stop", () => {
+    const seq = () => ({ ...makeBase(), concurrency: 1 });
+    const rejected = (id: string, calls: string[], error: Error = new HttpError("HTTP 401: invalid x-api-key", 401)): Judge => ({
+      id,
+      async judge({ sample, criterion }) {
+        calls.push(`${sample.id}/${criterion.id}`);
+        throw error;
+      },
+    });
+
+    it("stops calling a judge after three identical fatal errors and records why", async () => {
+      const calls: string[] = [];
+      const halts: string[] = [];
+      const meta = await executeRun({ ...seq(), judges: [rejected("bad-key", calls)], onHalt: (h) => halts.push(h.judge) });
+      expect(calls).toHaveLength(3); // 6 tasks, but the last 3 were never sent
+      expect(halts).toEqual(["bad-key"]);
+      expect(meta.status).toBe("halted");
+      expect(meta.halted).toEqual([{ judge: "bad-key", reason: expect.stringContaining("authentication failed") }]);
+      expect(meta.counts).toEqual({ tasks: 6, failed: 6 });
+      expect((await store.loadResults(meta.id)).filter((r) => r.error)).toHaveLength(3);
+    });
+
+    it("keeps working judges running while it halts the broken one", async () => {
+      const calls: string[] = [];
+      const meta = await executeRun({ ...seq(), judges: [rejected("bad-key", calls), mockJudge("good")] });
+      expect(calls).toHaveLength(3);
+      expect(meta.status).toBe("halted");
+      expect(meta.counts).toEqual({ tasks: 12, failed: 6 });
+      const rows = await store.loadResults(meta.id);
+      expect(rows.filter((r) => r.rater === "mock:good" && r.score !== undefined)).toHaveLength(6);
+    });
+
+    it("can be resumed once the cause is fixed, which clears the halt", async () => {
+      let fixed = false;
+      const calls: string[] = [];
+      const judge: Judge = {
+        id: "bad-key",
+        async judge({ sample, criterion }) {
+          calls.push(`${sample.id}/${criterion.id}`);
+          if (!fixed) throw new HttpError("HTTP 401: invalid x-api-key", 401);
+          return { score: 4, rationale: "" };
+        },
+      };
+      const first = await executeRun({ ...seq(), judges: [judge] });
+      expect(first.status).toBe("halted");
+
+      fixed = true;
+      calls.length = 0;
+      const second = await executeRun({ ...seq(), judges: [judge], resume: first.id });
+      expect(calls).toHaveLength(6); // every task still lacked a result
+      expect(second.status).toBe("completed");
+      expect(second.halted).toBeUndefined();
+      expect(second.counts).toEqual({ tasks: 6, failed: 0 });
+      expect(second.resumes).toBe(1);
+    });
+
+    it("does not halt on errors that are specific to a request or transient", async () => {
+      const calls: string[] = [];
+      const meta = await executeRun({ ...seq(), judges: [rejected("picky", calls, new HttpError("HTTP 400: prompt is too long", 400))] });
+      expect(calls).toHaveLength(6);
+      expect(meta.status).toBe("failed");
+      expect(meta.halted).toBeUndefined();
+    });
+
+    it("does not halt when successes or different errors interrupt the streak", async () => {
+      let n = 0;
+      const errors = [401, 401, 0, 401, 403, 401];
+      const flaky: Judge = {
+        id: "flaky",
+        async judge() {
+          const code = errors[n++];
+          if (code === 0) return { score: 3, rationale: "" };
+          throw new HttpError(`HTTP ${code}: no`, code);
+        },
+      };
+      const meta = await executeRun({ ...seq(), judges: [flaky] });
+      expect(n).toBe(6);
+      expect(meta.status).toBe("completed");
+      expect(meta.halted).toBeUndefined();
+    });
+
+    it("honours haltAfter and rejects an invalid value", async () => {
+      const calls: string[] = [];
+      await executeRun({ ...seq(), judges: [rejected("bad-key", calls)], haltAfter: 1 });
+      expect(calls).toHaveLength(1);
+      await expect(executeRun({ ...seq(), judges: [mockJudge("a")], haltAfter: 0 })).rejects.toThrow(/haltAfter/);
     });
   });
 });

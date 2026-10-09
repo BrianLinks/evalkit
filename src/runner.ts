@@ -1,3 +1,4 @@
+import { FatalBreaker, type Halt } from "./breaker.js";
 import { ConfigError, errorMessage } from "./errors.js";
 import { validateAgainstRubric, type Sample } from "./dataset.js";
 import type { Judge } from "./judges/types.js";
@@ -17,6 +18,10 @@ export interface ExecuteOptions {
   resume?: string;
   /** Called once the run exists, before any judge is called. */
   onStart?: (meta: RunMeta) => void;
+  /** Stop sending requests to a judge after this many identical fatal errors in a row (bad key, no credit, unknown model). Default 3. */
+  haltAfter?: number;
+  /** Called when a judge is halted, so a long run can say so immediately. */
+  onHalt?: (halt: Halt) => void;
   now?: () => Date;
 }
 
@@ -46,6 +51,8 @@ export async function executeRun(options: ExecuteOptions): Promise<RunMeta> {
   const ids = judges.map((j) => j.id);
   if (new Set(ids).size !== ids.length) throw new ConfigError("the same judge was listed twice");
   if (!Number.isInteger(options.concurrency) || options.concurrency < 1) throw new ConfigError("concurrency must be a positive integer");
+  const haltAfter = options.haltAfter ?? 3;
+  if (!Number.isInteger(haltAfter) || haltAfter < 1) throw new ConfigError("haltAfter must be a positive integer");
 
   const datasetSha256 = sha256(options.datasetText);
   const rubricSha256 = sha256(JSON.stringify(rubric));
@@ -84,6 +91,8 @@ export async function executeRun(options: ExecuteOptions): Promise<RunMeta> {
     }
   }
 
+  const breaker = new FatalBreaker(haltAfter, options.onHalt);
+
   try {
     for (const sample of samples) {
       for (const [criterionId, score] of Object.entries(sample.humanScores ?? {})) {
@@ -93,6 +102,7 @@ export async function executeRun(options: ExecuteOptions): Promise<RunMeta> {
     }
 
     await pool(tasks, options.concurrency, async ({ sample, criterionIndex, judge }) => {
+      if (breaker.isHalted(judge.id)) return;
       const criterion = rubric.criteria[criterionIndex];
       const base = { sampleId: sample.id, criterionId: criterion.id, rater: judge.id, kind: "judge" as const };
       try {
@@ -102,7 +112,9 @@ export async function executeRun(options: ExecuteOptions): Promise<RunMeta> {
           throw new Error(`judge returned score ${verdict.score}, outside ${min}..${max}`);
         }
         await store.append(meta.id, { ...base, score: verdict.score, rationale: verdict.rationale });
+        breaker.recordSuccess(judge.id);
       } catch (e) {
+        breaker.recordFailure(judge.id, e);
         await store.append(meta.id, { ...base, error: errorMessage(e) });
       }
     });
@@ -113,6 +125,8 @@ export async function executeRun(options: ExecuteOptions): Promise<RunMeta> {
 
   const resolved = resolveResults(await store.loadResults(meta.id));
   const judgeScored = resolved.ok.filter((r) => r.kind === "judge").length;
-  const status = total > 0 && judgeScored === 0 ? "failed" : "completed";
-  return store.finish(meta.id, status, { tasks: total, failed: resolved.failures.length }, now());
+  const halted = breaker.halted;
+  const status = halted.length > 0 ? "halted" : total > 0 && judgeScored === 0 ? "failed" : "completed";
+  // Tasks skipped after a halt have no row, so count everything not scored as unfinished.
+  return store.finish(meta.id, status, { tasks: total, failed: total - judgeScored }, now(), halted);
 }

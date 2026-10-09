@@ -73,6 +73,17 @@ describe("RunStore", () => {
     expect((await store.reopen(meta.id)).resumes).toBe(2);
   });
 
+  it("saves halted judges on finish and clears them on reopen", async () => {
+    const store = new RunStore(dir);
+    const meta = await store.create(input);
+    const halted = [{ judge: "mock:a", reason: "authentication failed (HTTP 401): check the API key" }];
+    const finished = await store.finish(meta.id, "halted", { tasks: 4, failed: 4 }, new Date(), halted);
+    expect(finished.status).toBe("halted");
+    expect((await store.loadMeta(meta.id)).halted).toEqual(halted);
+    expect((await store.reopen(meta.id)).halted).toBeUndefined();
+    expect((await store.loadMeta(meta.id)).halted).toBeUndefined();
+  });
+
   it("writes meta.json with a trailing newline", async () => {
     const store = new RunStore(dir);
     const meta = await store.create(input);

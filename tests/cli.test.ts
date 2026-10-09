@@ -268,4 +268,43 @@ describe("cli", () => {
     expect(await main(["bias", "nope", "--dataset", dataset, "--store", store], unknown.io)).toBe(1);
     expect(unknown.err()).toContain("not found");
   });
+
+  it("stops early and says why when the API rejects the key, then finishes after a resume", async () => {
+    let calls = 0;
+    const unauthorized = (async () => {
+      calls++;
+      return new Response('{"error":{"message":"invalid x-api-key"}}', { status: 401 });
+    }) as typeof fetch;
+    const env = { ANTHROPIC_API_KEY: "k" };
+    const first = harness(env, unauthorized);
+    const args = ["run", "--rubric", rubric, "--dataset", dataset, "--judge", "anthropic:m", "--concurrency", "1", "--store", store];
+    expect(await main(args, first.io)).toBe(1);
+    expect(calls).toBe(3); // 24 calls were planned; the run gave up after 3
+    expect(first.err()).toContain("stopped sending requests to anthropic:m: authentication failed");
+    expect(first.out()).toContain("(halted)");
+    expect(first.out()).toContain("HALTED EARLY");
+    const runId = /run (\S+) started/.exec(first.err())?.[1] as string;
+    expect(first.out()).toContain(`--resume ${runId}`);
+
+    const healthy = (async () =>
+      new Response(JSON.stringify({ content: [{ type: "text", text: '{"score":4,"rationale":"ok"}' }] }), { status: 200 })) as typeof fetch;
+    const second = harness(env, healthy);
+    expect(await main([...args, "--resume", runId], second.io)).toBe(0);
+    expect(second.out()).toContain(`Run ${runId} (completed)`);
+    expect(second.out()).not.toContain("HALTED");
+  });
+
+  it("applies the same early stop to pairwise runs", async () => {
+    let calls = 0;
+    const noCredit = (async () => {
+      calls++;
+      return new Response('{"error":{"message":"Your credit balance is too low to access the API."}}', { status: 400 });
+    }) as typeof fetch;
+    const h = harness({ OPENAI_API_KEY: "k" }, noCredit);
+    const code = await main(["compare", "run", "--rubric", rubric, "--pairs", pairs, "--judge", "openai:m", "--concurrency", "1", "--store", store], h.io);
+    expect(code).toBe(1);
+    expect(calls).toBe(3);
+    expect(h.err()).toContain("billing or quota problem");
+    expect(h.out()).toContain("HALTED EARLY");
+  });
 });

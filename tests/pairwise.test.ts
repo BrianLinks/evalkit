@@ -8,6 +8,7 @@ import { executePairwiseRun } from "../src/pairwise/runner.js";
 import { PairStore, type PairRow } from "../src/pairwise/store.js";
 import type { PairJudge, PairRequest } from "../src/judges/types.js";
 import { mockJudge } from "../src/judges/mock.js";
+import { HttpError } from "../src/errors.js";
 import { parseRubric } from "../src/rubric/parser.js";
 
 let dir: string;
@@ -209,5 +210,40 @@ describe("pair report bootstrap", () => {
     expect(text).toMatch(/human vs j: n=10, agree 80%, kappa \d\.\d\d \[/);
     expect(text).toContain("percentile bootstrap");
   });
-});
 
+describe("pairwise early stop", () => {
+  it("halts a judge after three identical fatal errors, then resumes cleanly once fixed", async () => {
+    let fixed = false;
+    let calls = 0;
+    const judge: PairJudge = {
+      id: "credit",
+      async compare(request) {
+        calls++;
+        if (!fixed) throw new HttpError('HTTP 400: {"message":"Your credit balance is too low"}', 400);
+        return smart.compare(request);
+      },
+    };
+    const first = await executePairwiseRun({ ...makeBase(), concurrency: 1, judges: [judge] });
+    expect(calls).toBe(3);
+    expect(first.status).toBe("halted");
+    expect(first.halted?.[0].reason).toMatch(/billing or quota problem/);
+    expect(first.counts).toEqual({ tasks: 12, failed: 12 });
+
+    fixed = true;
+    const second = await executePairwiseRun({ ...makeBase(), concurrency: 1, judges: [judge], resume: first.id });
+    expect(second.status).toBe("completed");
+    expect(second.halted).toBeUndefined();
+    expect(second.counts).toEqual({ tasks: 12, failed: 0 });
+  });
+
+  it("explains a halt in the report and says how to continue", async () => {
+    const judge: PairJudge = { id: "bad", compare: async () => Promise.reject(new HttpError("HTTP 401: no", 401)) };
+    const meta = await executePairwiseRun({ ...makeBase(), concurrency: 1, judges: [judge] });
+    const report = buildPairReport(meta, await store.loadRows(meta.id));
+    expect(report.halted).toHaveLength(1);
+    const text = formatPairReport(report);
+    expect(text).toContain("HALTED EARLY: bad stopped, authentication failed");
+    expect(text).toContain(`--resume ${meta.id}`);
+  });
+});
+});

@@ -133,3 +133,20 @@ describe("bootstrap intervals in the report", () => {
   });
 });
 
+describe("halted runs in the report", () => {
+  it("shows which judge stopped, why, and the exact command to continue", () => {
+    const halted = [{ judge: "j2", reason: "billing or quota problem (HTTP 400): add credit or raise the limit" }];
+    const report = buildReport({ ...meta, status: "halted", halted }, results);
+    expect(report.halted).toEqual(halted);
+    const text = formatReport(report);
+    expect(text).toContain("Run run1 (halted)");
+    expect(text).toContain("HALTED EARLY: j2 stopped, billing or quota problem");
+    expect(text).toContain("--resume run1");
+  });
+  it("says nothing about halting when nothing halted", () => {
+    const report = buildReport(meta, results);
+    expect(report.halted).toBeUndefined();
+    expect(formatReport(report)).not.toContain("HALTED");
+  });
+});
+
