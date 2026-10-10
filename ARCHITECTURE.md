@@ -25,6 +25,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 | `src/fileStore.ts` | Generic file-based run store: `meta.json` plus append-only `results.jsonl` per run, validated on every read. |
 | `src/store.ts` | `RunStore` for score runs, and `resolveResults`, which collapses the log to its current state (latest success wins). |
 | `src/resolve.ts`, `src/pool.ts` | Log resolution shared by both run types, and the bounded worker pool. |
+| `src/export/` | Report export. `model.ts` is a small document model (headings, tables, warnings, notes). `documents.ts` and `biasBlocks.ts` build a document from a report. `markdown.ts` and `html.ts` render it. The HTML renderer emits one self-contained file with a restrictive CSP. |
 | `src/bias/` | Length-bias checks. `length.ts` (word/char counts, dataset hash guard), `scoreBias.ts` (length-score correlation and gap versus human), `pairBias.ts` (how often the longer response wins, and on human-tie pairs). They read stored results and the original dataset. |
 | `src/pairwise/` | Pairwise mode: `dataset.ts`, `store.ts` (`PairStore`), `runner.ts` (both orders per judge), `report.ts` (win rates, position-bias stats, agreement). |
 | `src/stats/` | Pure functions, no I/O. `agreement.ts`: percent agreement, weighted kappa, Spearman, Krippendorff's alpha. `proportion.ts`: Wilson interval. `bootstrap.ts`: seeded percentile bootstrap. |
@@ -37,6 +38,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 - Result files are append-only. The current state of a run is always derived by resolving the log (latest success per key wins), never by editing it.
 - One judge failure never aborts a run. Repeated fatal errors halt only that judge, and a halted run is resumable. It is stored as an error row and counted. A run is marked `failed` only when every task failed.
 - Statistics return `null` when they are undefined. Nothing is silently turned into 0. A bootstrap interval is `null` rather than a guess when too many resamples are undefined.
+- Exported text is escaped for its target format. HTML output contains no scripts and no external resources.
 - Randomness is seeded and local to the call, so the same input, flags and seed always produce the same report.
 - Run ids are validated before they touch the filesystem.
 - Analyses that need response text (bias checks) take the dataset file again and verify its SHA-256 against the run, so results can never be paired with the wrong text.

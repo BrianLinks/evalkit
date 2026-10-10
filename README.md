@@ -2,7 +2,7 @@
 
 Score LLM outputs against a rubric using LLM judges, compare two systems head to head, and measure how much the judges agree with each other and with human scores.
 
-You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, agreement statistics can come with bootstrap confidence intervals, and a bias check shows whether judges favour longer answers.
+You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, agreement statistics can come with bootstrap confidence intervals, a bias check shows whether judges favour longer answers, and any run can be exported as a Markdown or HTML report.
 
 ## Quick start
 
@@ -148,6 +148,22 @@ What this does not tell you:
 - A `!` is a warning from a rule, not a proof. It does not correct for running many comparisons, so with several judges and criteria one may appear by chance. Check it against more data before acting on it.
 - Without human scores or preferences it can show correlations but cannot separate length bias from real quality differences.
 - Small datasets give wide intervals and usually no flag. That is the honest result, not a pass.
+
+## Exporting a report
+
+Turn a run into something you can send to someone who will not read terminal output:
+
+```sh
+node dist/bin.js export <run-id> --out report.html
+node dist/bin.js export <run-id> --out report.md
+node dist/bin.js compare export <run-id> --out comparison.html
+```
+
+The format comes from the file extension (`.html` or `.htm` gives HTML, anything else Markdown), or from `--format md|html`. Without `--out` the report is printed to stdout. An existing file is never overwritten unless you pass `--force`.
+
+The report has the run details (id, status, rubric, judges, dataset hash), an overall score table, a section per criterion with agreement statistics, a warning for any judge that was halted early with the exact `--resume` command, and a short "How to read this" note. Add `--bootstrap <n>` for confidence intervals. Add `--dataset <file>` (or `--pairs <file>` for `compare export`) to include the length-bias section; the file must be the exact one the run used.
+
+The HTML is one self-contained file: styles are inline, there are no scripts, no fonts, no images and no external requests, and it carries a Content-Security-Policy that forbids them. It follows the viewer's light or dark setting and prints cleanly. All text from your rubric and data is escaped in both formats. See [ADR 0009](docs/adr/0009-one-document-model-two-renderers.md).
 
 ## Reading the report
 

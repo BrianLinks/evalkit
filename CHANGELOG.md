@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 - 2026-10-10
+
+- Report export: `evalkit export <run-id>` and `evalkit compare export <run-id>` write a shareable report as Markdown or as one self-contained HTML file. Format follows the file extension or `--format`.
+- Reports include run details, overall scores, per-criterion agreement tables, halted-run warnings with the resume command, and optional bootstrap intervals and length-bias sections (`--dataset` / `--pairs`).
+- Safe by default: all text is escaped, HTML has no scripts or external resources and a restrictive CSP, and an existing output file is only replaced with `--force`.
+- Internal: a small document model rendered by two renderers, so both formats always match.
+
 ## 0.5.0 - 2026-10-09
 
 - Early stop: after 3 identical fatal errors in a row from a judge (rejected key, no permission, unknown model, billing or quota problem), EvalKit stops sending that judge requests, says why immediately, and marks the run `halted`. Applies to `run` and `compare run`.
