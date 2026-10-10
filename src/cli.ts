@@ -1,9 +1,14 @@
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { assertDatasetMatches, type LengthUnit } from "./bias/length.js";
 import { buildPairLengthBias, formatPairLengthBias } from "./bias/pairBias.js";
 import { buildLengthBias, formatLengthBias } from "./bias/scoreBias.js";
 import { parseDataset, readTextFile } from "./dataset.js";
+import { buildPairDocument, buildScoreDocument } from "./export/documents.js";
+import { renderHtml } from "./export/html.js";
+import { renderMarkdown } from "./export/markdown.js";
+import type { ReportDocument } from "./export/model.js";
 import { EvalKitError, UsageError } from "./errors.js";
 import { createJudge } from "./judges/index.js";
 import { parsePairDataset } from "./pairwise/dataset.js";
@@ -35,13 +40,21 @@ Usage:
   evalkit bias <run-id> --dataset <file.jsonl> [--unit words|chars] [--json] [--store <dir>]
                [--bootstrap <n> [--seed <n>]]
 
+  evalkit export <run-id> [--format md|html] [--out <file>] [--force] [--dataset <file.jsonl>]
+                 [--unit words|chars] [--store <dir>] [--bootstrap <n> [--seed <n>]]
+
   evalkit compare run --rubric <file> --pairs <file.jsonl> --judge <spec> [--judge <spec> ...]
                       [--label-a <name>] [--label-b <name>] [--concurrency <n>]
                       [--store <dir>] [--resume <run-id>] [--bootstrap <n> [--seed <n>]]
   evalkit compare report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit compare list [--store <dir>]
+  evalkit compare export <run-id> [--format md|html] [--out <file>] [--force] [--pairs <file.jsonl>]
+                         [--unit words|chars] [--min-diff <0-1>] [--store <dir>]
   evalkit compare bias <run-id> --pairs <file.jsonl> [--unit words|chars] [--min-diff <0-1>]
                        [--json] [--store <dir>]
+
+export writes a shareable report (Markdown or one self-contained HTML file) to stdout or --out.
+With --dataset (or --pairs for compare export) it also includes the length-bias section.
 
 bias checks whether judges favour longer responses. Pass the original dataset file; it must be the
 exact file the run used, because runs do not store response text.
@@ -300,6 +313,103 @@ async function compareBiasCommand(args: string[], io: CliIo): Promise<number> {
   return 0;
 }
 
+function resolveFormat(format: string | undefined, out: string | undefined): "md" | "html" {
+  if (format !== undefined) {
+    if (format === "md" || format === "html") return format;
+    throw new UsageError("--format must be md or html");
+  }
+  return out !== undefined && /\.html?$/i.test(out) ? "html" : "md";
+}
+
+const renderDocument = (doc: ReportDocument, format: "md" | "html"): string => (format === "html" ? renderHtml(doc) : renderMarkdown(doc));
+
+/** Print to stdout, or write to `out`. An existing file is only replaced with --force. */
+async function emit(io: CliIo, text: string, out: string | undefined, force: boolean): Promise<void> {
+  if (out === undefined) {
+    io.out(text);
+    return;
+  }
+  try {
+    await writeFile(out, text, { encoding: "utf8", flag: force ? "w" : "wx" });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new EvalKitError(`${out} already exists; use --force to overwrite it`);
+    throw new EvalKitError(`cannot write ${out}`);
+  }
+  io.err(`wrote ${out}\n`);
+}
+
+async function exportCommand(args: string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      format: { type: "string" },
+      out: { type: "string" },
+      force: { type: "boolean", default: false },
+      dataset: { type: "string" },
+      unit: { type: "string" },
+      store: { type: "string", default: DEFAULT_STORE },
+      ...BOOT_OPTIONS,
+    },
+  });
+  if (positionals.length !== 1) {
+    throw new UsageError("usage: evalkit export <run-id> [--format md|html] [--out <file>] [--force] [--dataset <file.jsonl>] [--unit words|chars] [--store <dir>] [--bootstrap <n> [--seed <n>]]");
+  }
+  const format = resolveFormat(values.format, values.out);
+  const unit = parseUnit(values.unit);
+  if (values.unit !== undefined && values.dataset === undefined) throw new UsageError("--unit only applies together with --dataset");
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
+
+  const { meta, results } = await new RunStore(values.store ?? DEFAULT_STORE).load(positionals[0]);
+  let bias;
+  if (values.dataset !== undefined) {
+    const text = await readTextFile(values.dataset);
+    assertDatasetMatches(meta, text);
+    bias = buildLengthBias(meta, results, parseDataset(text), { unit, bootstrap });
+  }
+  const doc = buildScoreDocument(meta, buildReport(meta, results, { bootstrap }), bias);
+  await emit(io, renderDocument(doc, format), values.out, values.force ?? false);
+  return 0;
+}
+
+async function compareExportCommand(args: string[], io: CliIo): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      format: { type: "string" },
+      out: { type: "string" },
+      force: { type: "boolean", default: false },
+      pairs: { type: "string" },
+      unit: { type: "string" },
+      "min-diff": { type: "string" },
+      store: { type: "string", default: DEFAULT_STORE },
+      ...BOOT_OPTIONS,
+    },
+  });
+  if (positionals.length !== 1) {
+    throw new UsageError("usage: evalkit compare export <run-id> [--format md|html] [--out <file>] [--force] [--pairs <file.jsonl>] [--unit words|chars] [--min-diff <0-1>] [--store <dir>] [--bootstrap <n> [--seed <n>]]");
+  }
+  const format = resolveFormat(values.format, values.out);
+  const unit = parseUnit(values.unit);
+  const minDiff = parseMinDiff(values["min-diff"]);
+  if ((values.unit !== undefined || values["min-diff"] !== undefined) && values.pairs === undefined) {
+    throw new UsageError("--unit and --min-diff only apply together with --pairs");
+  }
+  const bootstrap = parseBootstrap(values.bootstrap, values.seed);
+
+  const { meta, rows } = await pairStore(values.store).load(positionals[0]);
+  let bias;
+  if (values.pairs !== undefined) {
+    const text = await readTextFile(values.pairs);
+    assertDatasetMatches(meta, text);
+    bias = buildPairLengthBias(meta, rows, parsePairDataset(text), { unit, minDiff });
+  }
+  const doc = buildPairDocument(meta, buildPairReport(meta, rows, { bootstrap }), bias);
+  await emit(io, renderDocument(doc, format), values.out, values.force ?? false);
+  return 0;
+}
+
 async function compareCommand(args: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = args;
   switch (sub) {
@@ -311,8 +421,10 @@ async function compareCommand(args: string[], io: CliIo): Promise<number> {
       return compareListCommand(rest, io);
     case "bias":
       return compareBiasCommand(rest, io);
+    case "export":
+      return compareExportCommand(rest, io);
     default:
-      throw new UsageError("usage: evalkit compare run|report|list|bias ...");
+      throw new UsageError("usage: evalkit compare run|report|list|bias|export ...");
   }
 }
 
@@ -331,6 +443,8 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
         return await runsCommand(rest, io);
       case "bias":
         return await biasCommand(rest, io);
+      case "export":
+        return await exportCommand(rest, io);
       case "compare":
         return await compareCommand(rest, io);
       case undefined:

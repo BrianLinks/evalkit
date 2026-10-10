@@ -174,6 +174,16 @@ describe("report documents", () => {
     }
   });
 
+  it("produces balanced HTML tags for a full report", async () => {
+    const { meta, results, samples } = await scoreFixture();
+    const html = renderHtml(buildScoreDocument(meta, buildReport(meta, results), buildLengthBias(meta, results, samples, { unit: "words" })));
+    for (const tag of ["table", "thead", "tbody", "tr", "div", "dl", "h2", "h3", "p", "main", "html", "head", "body"]) {
+      const opens = (html.match(new RegExp(`<${tag}(\\s[^>]*)?>`, "g")) ?? []).length;
+      const closes = (html.match(new RegExp(`</${tag}>`, "g")) ?? []).length;
+      expect(opens, tag).toBe(closes);
+    }
+  });
+
   it("builds a pairwise document with labels, win-rate tables and optional length bias", async () => {
     const rubric = parseRubric(await example("helpfulness.rubric"));
     const datasetText = await example("pairs.jsonl");

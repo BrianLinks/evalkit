@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -307,4 +307,103 @@ describe("cli", () => {
     expect(h.err()).toContain("billing or quota problem");
     expect(h.out()).toContain("HALTED EARLY");
   });
+
+  describe("export", () => {
+    async function scoreRun(): Promise<string> {
+      const run = harness();
+      await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "mock:a", "--judge", "mock:b", "--store", store], run.io);
+      return /run (\S+) started/.exec(run.err())?.[1] as string;
+    }
+
+    it("prints Markdown to stdout by default", async () => {
+      const runId = await scoreRun();
+      const h = harness();
+      expect(await main(["export", runId, "--store", store], h.io)).toBe(0);
+      expect(h.out()).toContain("# EvalKit report: Helpfulness");
+      expect(h.out()).toContain("| Rater | Score |");
+      expect(h.out()).toContain(`- **Run:** ${runId}`);
+    });
+
+    it("writes self-contained HTML to a file and infers the format from the extension", async () => {
+      const runId = await scoreRun();
+      const out = join(store, "report.html");
+      const h = harness();
+      expect(await main(["export", runId, "--out", out, "--store", store], h.io)).toBe(0);
+      expect(h.out()).toBe("");
+      expect(h.err()).toContain(`wrote ${out}`);
+      const html = await readFile(out, "utf8");
+      expect(html.startsWith("<!doctype html>")).toBe(true);
+      expect(html).toContain("Content-Security-Policy");
+      expect(html).not.toMatch(/<script/i);
+    });
+
+    it("lets --format override the extension", async () => {
+      const runId = await scoreRun();
+      const out = join(store, "report.html");
+      await main(["export", runId, "--out", out, "--format", "md", "--store", store], harness().io);
+      expect((await readFile(out, "utf8")).startsWith("# EvalKit report")).toBe(true);
+    });
+
+    it("refuses to overwrite an existing file unless --force is given", async () => {
+      const runId = await scoreRun();
+      const out = join(store, "report.md");
+      await writeFile(out, "OLD");
+      const refused = harness();
+      expect(await main(["export", runId, "--out", out, "--store", store], refused.io)).toBe(1);
+      expect(refused.err()).toContain("--force");
+      expect(await readFile(out, "utf8")).toBe("OLD");
+
+      expect(await main(["export", runId, "--out", out, "--force", "--store", store], harness().io)).toBe(0);
+      expect((await readFile(out, "utf8")).startsWith("# EvalKit report")).toBe(true);
+    });
+
+    it("reports a path it cannot write", async () => {
+      const runId = await scoreRun();
+      const h = harness();
+      expect(await main(["export", runId, "--out", join(store, "no-such-dir", "r.md"), "--store", store], h.io)).toBe(1);
+      expect(h.err()).toContain("cannot write");
+    });
+
+    it("adds length bias and bootstrap intervals when asked, and refuses the wrong dataset", async () => {
+      const runId = await scoreRun();
+      const h = harness();
+      expect(await main(["export", runId, "--dataset", dataset, "--unit", "chars", "--bootstrap", "100", "--store", store], h.io)).toBe(0);
+      expect(h.out()).toContain("## Length bias (length measured in chars)");
+      expect(h.out()).toContain("percentile bootstrap");
+      const wrong = harness();
+      expect(await main(["export", runId, "--dataset", pairs, "--store", store], wrong.io)).toBe(1);
+      expect(wrong.err()).toContain("not the dataset run");
+    });
+
+    it("exports a pairwise run, with length bias when --pairs is given", async () => {
+      const run = harness();
+      await main(["compare", "run", "--rubric", rubric, "--pairs", pairs, "--judge", "mock:a", "--store", store], run.io);
+      const runId = /compare run (\S+) started/.exec(run.err())?.[1] as string;
+
+      const plain = harness();
+      expect(await main(["compare", "export", runId, "--store", store], plain.io)).toBe(0);
+      expect(plain.out()).toContain("# EvalKit pairwise report: Helpfulness");
+      expect(plain.out()).not.toContain("Length bias");
+
+      const out = join(store, "pairs.html");
+      expect(await main(["compare", "export", runId, "--pairs", pairs, "--min-diff", "0.2", "--out", out, "--store", store], harness().io)).toBe(0);
+      const html = await readFile(out, "utf8");
+      expect(html).toContain("Longer response wins [95% CI]");
+      expect(html).toContain("at least 20%");
+    });
+
+    it("gives usage errors before reading the store, and a clear error for an unknown run", async () => {
+      for (const argv of [
+        ["export"], ["export", "x", "--format", "pdf"], ["export", "x", "--unit", "chars"], ["export", "x", "--bootstrap", "5"],
+        ["compare", "export"], ["compare", "export", "x", "--format", "pdf"], ["compare", "export", "x", "--min-diff", "0.2"],
+        ["compare", "export", "x", "--unit", "chars"],
+      ]) {
+        expect(await main([...argv, "--store", store], harness().io), argv.join(" ")).toBe(2);
+      }
+      const unknown = harness();
+      expect(await main(["export", "nope", "--store", store], unknown.io)).toBe(1);
+      expect(unknown.err()).toContain("not found");
+    });
+  });
 });
+
