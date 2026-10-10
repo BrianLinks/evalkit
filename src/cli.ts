@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { FileCache } from "./cache.js";
 import { assertDatasetMatches, type LengthUnit } from "./bias/length.js";
 import { buildPairLengthBias, formatPairLengthBias } from "./bias/pairBias.js";
 import { buildLengthBias, formatLengthBias } from "./bias/scoreBias.js";
@@ -34,7 +35,7 @@ Usage:
   evalkit rubric check <file>
   evalkit run --rubric <file> --dataset <file.jsonl> --judge <spec> [--judge <spec> ...]
               [--concurrency <n>] [--store <dir>] [--resume <run-id>]
-              [--bootstrap <n> [--seed <n>]]
+              [--cache] [--bootstrap <n> [--seed <n>]]
   evalkit report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit runs [--store <dir>]
   evalkit bias <run-id> --dataset <file.jsonl> [--unit words|chars] [--json] [--store <dir>]
@@ -45,13 +46,19 @@ Usage:
 
   evalkit compare run --rubric <file> --pairs <file.jsonl> --judge <spec> [--judge <spec> ...]
                       [--label-a <name>] [--label-b <name>] [--concurrency <n>]
-                      [--store <dir>] [--resume <run-id>] [--bootstrap <n> [--seed <n>]]
+                      [--cache] [--store <dir>] [--resume <run-id>] [--bootstrap <n> [--seed <n>]]
   evalkit compare report <run-id> [--json] [--store <dir>] [--bootstrap <n> [--seed <n>]]
   evalkit compare list [--store <dir>]
+  evalkit cache stats|clear [--store <dir>]
+
   evalkit compare export <run-id> [--format md|html] [--out <file>] [--force] [--pairs <file.jsonl>]
                          [--unit words|chars] [--min-diff <0-1>] [--store <dir>]
   evalkit compare bias <run-id> --pairs <file.jsonl> [--unit words|chars] [--min-diff <0-1>]
                        [--json] [--store <dir>]
+
+--cache reuses earlier judge replies for identical requests (kept under <store>/cache), so a rerun,
+or a dataset with a few new samples, only pays for the new calls. Off by default, because reusing
+replies hides how much a judge varies between identical runs.
 
 export writes a shareable report (Markdown or one self-contained HTML file) to stdout or --out.
 With --dataset (or --pairs for compare export) it also includes the length-bias section.
@@ -114,6 +121,7 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
       concurrency: { type: "string", default: "4" },
       store: { type: "string", default: DEFAULT_STORE },
       resume: { type: "string" },
+      cache: { type: "boolean", default: false },
       ...BOOT_OPTIONS,
     },
   });
@@ -126,7 +134,8 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
   const rubric = parseRubric(await readTextFile(values.rubric));
   const datasetText = await readTextFile(values.dataset);
   const samples = parseDataset(datasetText);
-  const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch }));
+  const cache = values.cache ? new FileCache(join(values.store ?? DEFAULT_STORE, "cache")) : undefined;
+  const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch, cache }));
 
   const store = new RunStore(values.store ?? DEFAULT_STORE);
   const meta = await executeRun({
@@ -143,6 +152,7 @@ async function runCommand(args: string[], io: CliIo): Promise<number> {
   });
   const { results } = await store.load(meta.id);
   io.out(formatReport(buildReport(meta, results, { bootstrap })));
+  if (cache) io.err(`cache: ${cache.hits} reused, ${cache.stored} new calls\n`);
   return meta.status === "failed" || meta.status === "halted" ? 1 : 0;
 }
 
@@ -189,6 +199,7 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
       concurrency: { type: "string", default: "4" },
       store: { type: "string", default: DEFAULT_STORE },
       resume: { type: "string" },
+      cache: { type: "boolean", default: false },
       ...BOOT_OPTIONS,
     },
   });
@@ -201,7 +212,8 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
   const rubric = parseRubric(await readTextFile(values.rubric));
   const datasetText = await readTextFile(values.pairs);
   const pairs = parsePairDataset(datasetText);
-  const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch }));
+  const cache = values.cache ? new FileCache(join(values.store ?? DEFAULT_STORE, "cache")) : undefined;
+  const judges = specs.map((spec) => createJudge(spec, { env: io.env, fetch: io.fetch, cache }));
 
   const store = pairStore(values.store);
   const meta = await executePairwiseRun({
@@ -219,6 +231,7 @@ async function compareRunCommand(args: string[], io: CliIo): Promise<number> {
   });
   const { rows } = await store.load(meta.id);
   io.out(formatPairReport(buildPairReport(meta, rows, { bootstrap })));
+  if (cache) io.err(`cache: ${cache.hits} reused, ${cache.stored} new calls\n`);
   return meta.status === "failed" || meta.status === "halted" ? 1 : 0;
 }
 
@@ -410,6 +423,20 @@ async function compareExportCommand(args: string[], io: CliIo): Promise<number> 
   return 0;
 }
 
+async function cacheCommand(args: string[], io: CliIo): Promise<number> {
+  const [sub, ...rest] = args;
+  if (sub !== "stats" && sub !== "clear") throw new UsageError("usage: evalkit cache stats|clear [--store <dir>]");
+  const { values } = parseArgs({ args: rest, allowPositionals: false, options: { store: { type: "string", default: DEFAULT_STORE } } });
+  const cache = new FileCache(join(values.store ?? DEFAULT_STORE, "cache"));
+  if (sub === "clear") {
+    io.out(`removed ${await cache.clear()} cache entries\n`);
+    return 0;
+  }
+  const { entries, bytes } = await cache.stats();
+  io.out(`cache at ${cache.dir}: ${entries} entries, ${(bytes / 1024).toFixed(1)} KB\n`);
+  return 0;
+}
+
 async function compareCommand(args: string[], io: CliIo): Promise<number> {
   const [sub, ...rest] = args;
   switch (sub) {
@@ -445,6 +472,8 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
         return await biasCommand(rest, io);
       case "export":
         return await exportCommand(rest, io);
+      case "cache":
+        return await cacheCommand(rest, io);
       case "compare":
         return await compareCommand(rest, io);
       case undefined:

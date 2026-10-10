@@ -405,5 +405,88 @@ describe("cli", () => {
       expect(unknown.err()).toContain("not found");
     });
   });
+
+  describe("cache", () => {
+    const anthropicOk = (): { fetch: typeof fetch; calls: () => number } => {
+      let calls = 0;
+      return {
+        calls: () => calls,
+        fetch: (async () => {
+          calls++;
+          return new Response(JSON.stringify({ content: [{ type: "text", text: '{"score":4,"rationale":"ok"}' }] }), { status: 200 });
+        }) as typeof fetch,
+      };
+    };
+    const runArgs = (...extra: string[]): string[] => ["run", "--rubric", rubric, "--dataset", dataset, "--judge", "anthropic:m", "--store", store, ...extra];
+    const env = { ANTHROPIC_API_KEY: "k" };
+
+    it("reuses replies on a second identical run, and says how many calls it saved", async () => {
+      const api = anthropicOk();
+      const first = harness(env, api.fetch);
+      expect(await main(runArgs("--cache"), first.io)).toBe(0);
+      expect(api.calls()).toBe(24);
+      expect(first.err()).toContain("cache: 0 reused, 24 new calls");
+
+      const second = harness(env, api.fetch);
+      expect(await main(runArgs("--cache"), second.io)).toBe(0);
+      expect(api.calls()).toBe(24); // nothing new was sent
+      expect(second.err()).toContain("cache: 24 reused, 0 new calls");
+      expect(second.out()).toContain("Unresolved judge failures: 0");
+    });
+
+    it("is off unless asked for, so repeated runs still measure judge variation", async () => {
+      const api = anthropicOk();
+      await main(runArgs("--cache"), harness(env, api.fetch).io);
+      const plain = harness(env, api.fetch);
+      expect(await main(runArgs(), plain.io)).toBe(0);
+      expect(api.calls()).toBe(48);
+      expect(plain.err()).not.toContain("cache:");
+    });
+
+    it("shows and clears the cache", async () => {
+      const api = anthropicOk();
+      await main(runArgs("--cache"), harness(env, api.fetch).io);
+
+      const stats = harness();
+      expect(await main(["cache", "stats", "--store", store], stats.io)).toBe(0);
+      expect(stats.out()).toMatch(/: 24 entries, \d+\.\d KB/);
+
+      const clear = harness();
+      expect(await main(["cache", "clear", "--store", store], clear.io)).toBe(0);
+      expect(clear.out()).toBe("removed 24 cache entries\n");
+
+      const after = harness();
+      await main(["cache", "stats", "--store", store], after.io);
+      expect(after.out()).toContain(": 0 entries, 0.0 KB");
+      await main(runArgs("--cache"), harness(env, api.fetch).io);
+      expect(api.calls()).toBe(48); // cleared, so the second run paid again
+    });
+
+    it("works for pairwise runs", async () => {
+      let calls = 0;
+      const openai = (async () => {
+        calls++;
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"winner":"first","rationale":"x"}' } }] }), { status: 200 });
+      }) as typeof fetch;
+      const args = ["compare", "run", "--rubric", rubric, "--pairs", pairs, "--judge", "openai:m", "--cache", "--store", store];
+      const first = harness({ OPENAI_API_KEY: "k" }, openai);
+      expect(await main(args, first.io)).toBe(0);
+      expect(calls).toBe(36);
+      expect(first.err()).toContain("cache: 0 reused, 36 new calls");
+      const second = harness({ OPENAI_API_KEY: "k" }, openai);
+      expect(await main(args, second.io)).toBe(0);
+      expect(calls).toBe(36);
+      expect(second.err()).toContain("cache: 36 reused, 0 new calls");
+    });
+
+    it("is harmless with mock judges and gives usage errors for bad cache commands", async () => {
+      const mock = harness();
+      expect(await main(["run", "--rubric", rubric, "--dataset", dataset, "--judge", "mock:a", "--cache", "--store", store], mock.io)).toBe(0);
+      expect(mock.err()).toContain("cache: 0 reused, 0 new calls");
+      for (const argv of [["cache"], ["cache", "wipe"], ["cache", "stats", "--nope"], ["cache", "stats", "extra"]]) {
+        expect(await main(argv, harness().io), argv.join(" ")).toBe(2);
+      }
+    });
+  });
 });
 
