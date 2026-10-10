@@ -21,6 +21,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 | `src/dataset.ts` | Parses JSONL samples and checks human scores against the rubric. |
 | `src/judges/` | `types.ts` defines `Judge` (score), `PairJudge` (compare) and `Completer` (raw text). `prompt.ts` builds prompts and parses replies for both. `llm.ts` turns any `Completer` into a judge. `http.ts` is the retrying POST helper. `anthropic.ts` and `openai.ts` are completers; `mock.ts` is offline. `index.ts` is the factory. |
 | `src/breaker.ts` | `fatalReason` classifies errors that will recur for every call (bad key, no permission, unknown model, billing). `FatalBreaker` halts one judge after N identical ones in a row. Used by both runners. |
+| `src/cache.ts` | Optional reply cache. `cacheKey` hashes judge, kind and full prompts. `FileCache` stores one atomically written file per entry. `judges/llm.ts` consults it and stores a reply only after it parsed. |
 | `src/runner.ts` | Expands samples × criteria × judges into tasks, runs them through a bounded worker pool, records each outcome. |
 | `src/fileStore.ts` | Generic file-based run store: `meta.json` plus append-only `results.jsonl` per run, validated on every read. |
 | `src/store.ts` | `RunStore` for score runs, and `resolveResults`, which collapses the log to its current state (latest success wins). |
@@ -39,6 +40,7 @@ judge specs ──► createJudge ──► Judge[] ─┘                      
 - One judge failure never aborts a run. Repeated fatal errors halt only that judge, and a halted run is resumable. It is stored as an error row and counted. A run is marked `failed` only when every task failed.
 - Statistics return `null` when they are undefined. Nothing is silently turned into 0. A bootstrap interval is `null` rather than a guess when too many resamples are undefined.
 - Exported text is escaped for its target format. HTML output contains no scripts and no external resources.
+- A cached reply is only reused for a byte-identical request, and only replies that parsed are stored. Cache failures degrade to a live call.
 - Randomness is seeded and local to the call, so the same input, flags and seed always produce the same report.
 - Run ids are validated before they touch the filesystem.
 - Analyses that need response text (bias checks) take the dataset file again and verify its SHA-256 against the run, so results can never be paired with the wrong text.

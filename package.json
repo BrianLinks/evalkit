@@ -1,6 +1,6 @@
 {
   "name": "evalkit",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Score LLM outputs against a rubric with LLM judges, then measure how much the judges agree with each other and with humans.",
   "type": "module",
   "license": "MIT",

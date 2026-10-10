@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0 - 2026-10-10
+
+- Judge reply cache: `--cache` on `run` and `compare run` reuses earlier replies for identical requests, so reruns and datasets with a few new samples only pay for the new calls. Prints `cache: N reused, M new calls`.
+- `evalkit cache stats` and `evalkit cache clear`.
+- Only successfully parsed replies are cached. The key covers the judge, kind and full prompts, so nothing stale can be reused for a different question. Off by default so repeated runs still reveal judge variation.
+
 ## 0.6.0 - 2026-10-10
 
 - Report export: `evalkit export <run-id>` and `evalkit compare export <run-id>` write a shareable report as Markdown or as one self-contained HTML file. Format follows the file extension or `--format`.

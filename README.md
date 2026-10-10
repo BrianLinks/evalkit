@@ -2,7 +2,7 @@
 
 Score LLM outputs against a rubric using LLM judges, compare two systems head to head, and measure how much the judges agree with each other and with human scores.
 
-You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, agreement statistics can come with bootstrap confidence intervals, a bias check shows whether judges favour longer answers, and any run can be exported as a Markdown or HTML report.
+You write a rubric in a small text format, point EvalKit at a JSONL dataset, and pick one or more judges. EvalKit calls each judge once per sample per criterion, stores every result on disk, and reports agreement statistics (Cohen's kappa, Spearman, Krippendorff's alpha). Interrupted runs can be resumed, pairwise mode measures judge position bias, agreement statistics can come with bootstrap confidence intervals, a bias check shows whether judges favour longer answers, any run can be exported as a Markdown or HTML report, and an optional cache stops you paying twice for the same judge call.
 
 ## Quick start
 
@@ -78,6 +78,29 @@ Fix the cause, then continue with: evalkit run ... --resume <run-id>
 ```
 
 Only provider rejections of the key, model or account count. Rate limits, timeouts, dropped connections, server errors and a bad request for one sample never trigger a halt, and a success or a different error resets the count. A halted run exits with code 1. The threshold is 3 by default; library users can change it with `haltAfter`. See [ADR 0008](docs/adr/0008-halt-on-fatal-errors.md).
+
+## Caching judge calls
+
+Real judge calls cost money and time. Add `--cache` to `run` or `compare run` and EvalKit reuses an earlier reply whenever the request is identical:
+
+```sh
+node dist/bin.js run --rubric examples/helpfulness.rubric --dataset examples/sample.jsonl \
+  --judge anthropic:<model-id> --cache
+```
+
+The summary line on stderr says what happened, for example `cache: 24 reused, 0 new calls`. The two cases where it pays off:
+- Running the same evaluation again (a new run, the same rubric, dataset and judge) sends nothing.
+- Adding samples to a dataset and starting a new run sends only the new samples. A resumed run requires an unchanged dataset, so for a bigger dataset start a new run with `--cache` instead.
+
+How it works: each reply is stored under `<store>/cache` (default `.evalkit/cache`), keyed by a hash of the judge, whether it was scoring or comparing, and the complete prompts. Changing the model, the rubric text, the scale, a sample, or EvalKit's own prompt wording therefore changes the key, and a stale answer is never reused for a different question. Criterion weights are not part of the prompt, so changing a weight still reuses replies. Only replies that parsed successfully are stored, so a garbled reply or a failed call is always retried. `mock:` judges are free and are not cached.
+
+Things to know:
+- It is off by default on purpose. Repeating an identical run is how you measure how much a judge varies, and a cache would hide that by returning the same answers. Leave `--cache` off when you are measuring stability.
+- Entries hold the model's reply text, which can quote parts of your data in its rationale. They do not hold your prompts or your API key. Treat the cache folder like your data. `.evalkit/` is git-ignored by default.
+- `evalkit cache stats` shows how many entries there are, and `evalkit cache clear` deletes them. Clearing only removes the files EvalKit created.
+- Entries never expire and there is no size limit. A cache that cannot be read or written never fails a run, it only saves less.
+
+See [ADR 0010](docs/adr/0010-cache-parsed-replies-by-full-prompt.md).
 
 ## Pairwise comparison
 
