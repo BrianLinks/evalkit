@@ -15,3 +15,7 @@ export { bootstrapInterval, type BootstrapOptions, type Interval } from "./stats
 export { buildLengthBias, formatLengthBias, type LengthBiasReport } from "./bias/scoreBias.js";
 export { buildPairLengthBias, formatPairLengthBias, type PairLengthBiasReport } from "./bias/pairBias.js";
 export { textLength, type LengthUnit } from "./bias/length.js";
+export { buildScoreDocument, buildPairDocument } from "./export/documents.js";
+export { renderMarkdown } from "./export/markdown.js";
+export { renderHtml } from "./export/html.js";
+export type { Block, ReportDocument } from "./export/model.js";

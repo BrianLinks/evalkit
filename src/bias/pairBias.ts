@@ -110,7 +110,7 @@ export function buildPairLengthBias(
   };
 }
 
-const rateText = (w: LongerWins): string =>
+export const rateText = (w: LongerWins): string =>
   w.n === 0 ? "n/a" : `${w.longerWins}/${w.n} = ${pct(w.rate)}${w.ci ? ` [${pct(w.ci.low)}-${pct(w.ci.high)}]` : ""}`;
 
 export function formatPairLengthBias(report: PairLengthBiasReport): string {
