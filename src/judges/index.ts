@@ -1,3 +1,4 @@
+import type { VerdictCache } from "../cache.js";
 import { ConfigError } from "../errors.js";
 import { anthropicCompleter } from "./anthropic.js";
 import { DEFAULT_HTTP, type HttpOptions } from "./http.js";
@@ -10,6 +11,8 @@ export interface JudgeFactoryOptions {
   env: Record<string, string | undefined>;
   fetch?: typeof fetch;
   http?: Partial<HttpOptions>;
+  /** Reuse earlier replies for identical requests. Applies to the real providers, not to mock judges. */
+  cache?: VerdictCache;
 }
 
 /** Build a judge from a spec like `anthropic:<model>`, `openai:<model>` or `mock:<name>`. Fails fast on a missing key. */
@@ -36,9 +39,9 @@ export function createJudge(spec: string, options: JudgeFactoryOptions): Provide
     case "mock":
       return mockJudge(model);
     case "anthropic":
-      return fromCompleter(anthropicCompleter(model, requireKey("ANTHROPIC_API_KEY"), http));
+      return fromCompleter(anthropicCompleter(model, requireKey("ANTHROPIC_API_KEY"), http), options.cache);
     case "openai":
-      return fromCompleter(openaiCompleter(model, requireKey("OPENAI_API_KEY"), http));
+      return fromCompleter(openaiCompleter(model, requireKey("OPENAI_API_KEY"), http), options.cache);
     default:
       throw new ConfigError(`unknown judge provider "${provider}" (use anthropic, openai or mock)`);
   }

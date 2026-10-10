@@ -19,3 +19,4 @@ export { buildScoreDocument, buildPairDocument } from "./export/documents.js";
 export { renderMarkdown } from "./export/markdown.js";
 export { renderHtml } from "./export/html.js";
 export type { Block, ReportDocument } from "./export/model.js";
+export { FileCache, cacheKey, type VerdictCache } from "./cache.js";
